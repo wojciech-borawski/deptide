@@ -1,0 +1,17 @@
+[package]
+name = "deptide-cli"
+description = "Command line front end for the Deptide engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "deptide-cli"
+path = "src/main.rs"
+
+[dependencies]
+deptide-core.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

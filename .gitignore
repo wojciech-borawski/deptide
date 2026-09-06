@@ -1,0 +1,12 @@
+node_modules/
+dist/
+apps/*/dist/
+target/
+release/
+crates/deptide-desktop/gen/schemas/
+*.local
+
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.mcp.json

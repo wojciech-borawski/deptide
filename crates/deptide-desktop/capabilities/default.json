@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities of the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "dialog:allow-open",
+    "opener:allow-open-path",
+    "opener:allow-reveal-item-in-dir",
+    "opener:allow-open-url",
+    "dialog:allow-save",
+    "notification:default"
+  ]
+}
