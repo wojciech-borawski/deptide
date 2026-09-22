@@ -62,6 +62,7 @@ export const pl: Messages = {
     uninstall: "odinstaluj",
     install: "zainstaluj",
     "force-install": "wymuś instalację",
+    version: "podbij wersję",
     audit: "audyt",
     build: "build",
   },
@@ -197,6 +198,8 @@ export const pl: Messages = {
       install: "npm install wybranych wersji, zależności dev z --save-dev",
       "force-install":
         "npm install wybranych wersji z --force, pobiera ponownie nawet gdy wersja już jest. Alternatywa dla odinstaluj + zainstaluj",
+      version:
+        "npm version patch/minor/major dla samego projektu, bez tagu ani commita w git. Opcjonalnie tylko wtedy, gdy wersja wciąż jest taka jak na main",
       audit: "npm audit fix, nierozwiązane podatności tylko ostrzegają",
       build: "npm run build, gdy projekt ma skrypt build",
     },
@@ -210,6 +213,16 @@ export const pl: Messages = {
     atTheSameTime: "Projektów jednocześnie",
     parallelHint: "3 to bezpieczna wartość, więcej jest szybsze, ale bardziej obciąża dysk i sieć.",
     dryRun: "Próba na sucho: zapisuj, co by się stało, nic nie zmieniaj",
+    bump: {
+      title: "Podbicie wersji",
+      patch: "patch",
+      minor: "minor",
+      major: "major",
+      hint: "Uruchamia npm version --no-git-tag-version, więc zmieniają się tylko package.json i plik lock.",
+      onlyIfSameAsMain: "Tylko gdy wersja wciąż jest taka sama jak na gałęzi głównej",
+      onlyIfSameAsMainHint:
+        "Pomija projekty, które już podbito na tej gałęzi. Wymaga repozytorium git z gałęzią main lub master; w przeciwnym razie krok zapisuje w logu, dlaczego został pominięty.",
+    },
     flags: "Dodatkowe flagi npm install",
     flagsHint:
       "Dodawane po flagach z pliku konfiguracji. --force każe npm pobrać ponownie prerelease, który zachował wersję, ale zmienił zawartość.",
@@ -226,6 +239,8 @@ export const pl: Messages = {
     parallel: "Równolegle",
     atATime: "{count} naraz",
     installFlags: "Flagi instalacji",
+    versionBump: "Podbicie wersji",
+    onlyIfSameAsMain: "tylko gdy równa main",
     mode: "Tryb",
     label: "Etykieta przebiegu",
     labelHint: "Używana w nazwie pliku logu i w historii.",
@@ -255,6 +270,7 @@ export const pl: Messages = {
       time: "Czas",
       installed: "Zainstalowano",
       steps: "Kroki",
+      actions: "Akcje",
     },
     waitsFor: "czeka na {names}",
     stoppedBeforeFinished: "zatrzymano przed zakończeniem",
@@ -434,6 +450,9 @@ export const pl: Messages = {
     statuses: { added: "nowy", replaced: "zastąpiony", identical: "identyczny" },
     planCounts:
       "{added} nowych · {replaced} zastąpionych · {identical} identycznych · {skipped} pominiętych przez wzorce",
+    onlyHere: "{count} tylko na tym komputerze",
+    onlyHereHint:
+      "Te pliki istnieją w projekcie docelowym, ale nie ma ich w odebranym folderze. Mogły zostać usunięte na drugim komputerze i po scaleniu kandydują do usunięcia. Nic nie jest usuwane automatycznie.",
     receivedTitle: "Odebrano",
     receivedInto: "{added} nowych i {replaced} zastąpionych w {target}",
     logWritten: "Zapis zapisano w {path}",

@@ -27,6 +27,8 @@ function emptyDraft(): WizardDraft {
     concurrency: 3,
     dryRun: false,
     extraInstallArgs: "",
+    versionBump: "patch",
+    bumpOnlyIfSameAsMain: false,
     label: "",
     saveRun: true,
     saveName: "",
@@ -139,6 +141,8 @@ export const useWizardStore = defineStore("wizard", () => {
     draft.mode = run.mode;
     draft.concurrency = run.concurrency;
     draft.extraInstallArgs = run.extraInstallArgs.join(" ");
+    draft.versionBump = run.version.bump;
+    draft.bumpOnlyIfSameAsMain = run.version.onlyIfSameAsMain;
     draft.label = run.name;
     draft.saveRun = false;
     draft.saveName = run.name;

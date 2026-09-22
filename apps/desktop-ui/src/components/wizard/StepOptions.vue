@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { ExecutionMode, StepName } from "@/api/types";
-import { allSteps, forceSteps, fullSteps, simpleSteps } from "@/api/types";
+import { allBumps, allSteps, forceSteps, fullSteps, simpleSteps } from "@/api/types";
 import { orderedSteps, parseArguments } from "@/lib/wizard-plan";
 import { useWizardStore } from "@/stores/wizard";
 
@@ -86,6 +86,30 @@ function toggleFlag(flag: string): void {
             <span class="muted">{{ t(`options.stepText.${step}`) }}</span>
           </span>
         </label>
+      </div>
+
+      <div v-if="hasStep('version')" class="sub-panel stack">
+        <div class="field">
+          <label>{{ t("options.bump.title") }}</label>
+          <div class="row">
+            <button
+              v-for="bump in allBumps"
+              :key="bump"
+              class="chip"
+              :class="{ active: wizard.draft.versionBump === bump }"
+              type="button"
+              @click="wizard.draft.versionBump = bump"
+            >
+              {{ t(`options.bump.${bump}`) }}
+            </button>
+          </div>
+          <span class="hint muted">{{ t("options.bump.hint") }}</span>
+        </div>
+        <label class="switch">
+          <input v-model="wizard.draft.bumpOnlyIfSameAsMain" type="checkbox" />
+          <span>{{ t("options.bump.onlyIfSameAsMain") }}</span>
+        </label>
+        <span class="hint muted">{{ t("options.bump.onlyIfSameAsMainHint") }}</span>
       </div>
     </section>
 
@@ -228,5 +252,12 @@ function toggleFlag(flag: string): void {
 
 .wrap {
   flex-wrap: wrap;
+}
+
+.sub-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
 }
 </style>

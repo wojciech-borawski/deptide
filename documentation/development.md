@@ -140,6 +140,7 @@ screen.
 ```bash
 deptide-cli scan C:\example\workspace --apply
 deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 -P web -P api --steps install,build
+deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 --steps install,version,build --bump minor --bump-only-if-same-as-main
 deptide-cli exec C:\example\workspace --concurrency 4 -- git status
 deptide-cli history C:\example\workspace
 ```

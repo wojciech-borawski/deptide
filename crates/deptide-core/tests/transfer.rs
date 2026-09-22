@@ -160,6 +160,9 @@ fn receiving_classifies_files_and_copies_only_the_selection() {
     );
     root.write("repos/web/src/index.ts", "export const a = 1;\n");
     root.write("repos/web/README.md", "same\n");
+    root.write("repos/web/src/old.ts", "export const gone = 1;\n");
+    root.write("repos/web/notes.local", "no\n");
+    root.write("repos/web/node_modules/dep/index.js", "dep\n");
     let tool = root.mkdir("tool");
 
     let workspace = Workspace::open(&tool).unwrap();
@@ -188,6 +191,16 @@ fn receiving_classifies_files_and_copies_only_the_selection() {
             project.skipped
         ),
         (1, 2, 1, 1)
+    );
+    let only_here: Vec<&str> = project
+        .only_in_target
+        .iter()
+        .map(|file| file.relative.as_str())
+        .collect();
+    assert_eq!(
+        only_here,
+        vec!["src/old.ts"],
+        "files missing from the incoming folder are listed, ignored ones are not"
     );
     let status = |name: &str| {
         project

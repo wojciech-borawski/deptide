@@ -32,6 +32,7 @@ const stepColors: Record<StepName, string> = {
   uninstall: "var(--violet)",
   install: "var(--accent)",
   "force-install": "var(--ok)",
+  version: "var(--violet)",
   audit: "var(--warn)",
   build: "var(--running)",
 };
@@ -173,6 +174,7 @@ function canRestore(job: JobSnapshot): boolean {
         </span>
         <span
           v-if="canRestore(job)"
+          v-ripple
           class="btn btn-ghost btn-icon action"
           role="button"
           :title="t('run.restoreTitle')"
@@ -182,6 +184,7 @@ function canRestore(job: JobSnapshot): boolean {
         </span>
         <span
           v-if="props.rerunnable"
+          v-ripple
           class="btn btn-ghost btn-icon action"
           role="button"
           :title="t('run.rerunProject', { name: job.name })"

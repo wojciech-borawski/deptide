@@ -1,7 +1,9 @@
 mod common;
 
 use common::TempDir;
-use deptide_core::domain::{ExecutionMode, PackageSpec, SavedRun, Settings, StepName};
+use deptide_core::domain::{
+    ExecutionMode, PackageSpec, SavedRun, Settings, StepName, VersionPolicy,
+};
 use deptide_core::workspace::{
     delete_run, list_runs, load_config, load_run, load_settings, parse_config_text, save_config,
     save_run, save_settings, suggest_run_name, Workspace,
@@ -103,6 +105,7 @@ fn saved_runs_are_listed_newest_first_and_can_be_deleted() {
         concurrency: 2,
         mode: ExecutionMode::PerProject,
         extra_install_args: vec![],
+        version: VersionPolicy::default(),
     };
 
     save_run(&workspace, &run("Older Run!", "2026-01-01T00:00:00Z")).expect("saves");

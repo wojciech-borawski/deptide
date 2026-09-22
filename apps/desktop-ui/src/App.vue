@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 
 import { startupWorkspace } from "@/api/commands";
 import AppRail from "@/components/layout/AppRail.vue";
+import ToastHost from "@/components/ui/ToastHost.vue";
 import { routeNames } from "@/router";
 import { useRunStore } from "@/stores/run";
 import { useTerminalStore } from "@/stores/terminal";
@@ -40,6 +41,7 @@ onMounted(async () => {
         </transition>
       </router-view>
     </main>
+    <ToastHost />
   </div>
 </template>
 

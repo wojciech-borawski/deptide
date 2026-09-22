@@ -1,0 +1,14 @@
+# Check out every text file with LF so Prettier (endOfLine: lf) and rustfmt
+# see the same bytes on Windows and Linux runners.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.exe binary

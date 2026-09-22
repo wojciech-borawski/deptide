@@ -9,4 +9,5 @@ pub use project::{ConfiguredProject, DetectedProject, PackageManifest, ProjectKi
 pub use run::{
     DependencyChange, Diagnosis, ExecutionMode, InstalledPackage, Job, JobSnapshot, JobStatus,
     RunPlan, RunProjectSummary, RunSnapshot, RunSummary, SavedRun, StepName, StepTiming,
+    VersionBump, VersionPolicy,
 };

@@ -1,4 +1,4 @@
-use deptide_core::domain::{PackageSpec, RunPlan, StepName};
+use deptide_core::domain::{PackageSpec, RunPlan, StepName, VersionPolicy};
 use deptide_core::error::{AppError, AppResult};
 use deptide_core::execution::{
     build_jobs, collect_package_specs, collect_steps, prune_backups, RunOptions,
@@ -73,6 +73,10 @@ pub async fn execute(args: RunArgs) -> AppResult<ExitCode> {
                 .join("+")
         }),
         save_as: None,
+        version: VersionPolicy {
+            bump: args.bump.into(),
+            only_if_same_as_main: args.bump_only_if_same_as_main,
+        },
     };
 
     let outcome = build_jobs(&workspace, &config, &plan);

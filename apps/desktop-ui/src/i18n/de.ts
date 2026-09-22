@@ -62,6 +62,7 @@ export const de: Messages = {
     uninstall: "deinstallieren",
     install: "installieren",
     "force-install": "erzwungen installieren",
+    version: "Version erhöhen",
     audit: "Audit",
     build: "Build",
   },
@@ -199,6 +200,8 @@ export const de: Messages = {
       install: "npm install der gewählten Versionen, Dev-Abhängigkeiten mit --save-dev",
       "force-install":
         "npm install der gewählten Versionen mit --force, lädt auch neu, wenn die Version schon vorhanden ist. Alternative zu deinstallieren + installieren",
+      version:
+        "npm version patch/minor/major für das Projekt selbst, ohne Git-Tag oder Commit. Optional nur, wenn die Version noch der auf main entspricht",
       audit: "npm audit fix, ungelöste Schwachstellen erzeugen nur eine Warnung",
       build: "npm run build, wenn das Projekt ein Build-Skript hat",
     },
@@ -213,6 +216,16 @@ export const de: Messages = {
     atTheSameTime: "Projekte gleichzeitig",
     parallelHint: "3 ist ein sicherer Standard, mehr ist schneller, belastet aber Festplatte und Netzwerk stärker.",
     dryRun: "Probelauf: protokollieren, was passieren würde, nichts ändern",
+    bump: {
+      title: "Versionssprung",
+      patch: "Patch",
+      minor: "Minor",
+      major: "Major",
+      hint: "Führt npm version --no-git-tag-version aus, es ändern sich nur package.json und die Lock-Datei.",
+      onlyIfSameAsMain: "Nur, wenn die Version noch der auf dem Hauptzweig entspricht",
+      onlyIfSameAsMainHint:
+        "Überspringt Projekte, die auf diesem Zweig schon erhöht wurden. Braucht ein Git-Checkout mit einem main- oder master-Zweig; sonst protokolliert der Schritt, warum er übersprungen hat.",
+    },
     flags: "Zusätzliche npm-install-Flags",
     flagsHint:
       "Werden nach den Flags aus der Konfigurationsdatei angehängt. --force lässt npm ein Prerelease neu laden, das seine Version behalten, aber den Inhalt geändert hat.",
@@ -230,6 +243,8 @@ export const de: Messages = {
     parallel: "Parallel",
     atATime: "{count} gleichzeitig",
     installFlags: "Install-Flags",
+    versionBump: "Versionssprung",
+    onlyIfSameAsMain: "nur wenn gleich main",
     mode: "Modus",
     label: "Bezeichnung des Laufs",
     labelHint: "Wird für den Log-Dateinamen und den Verlauf verwendet.",
@@ -259,6 +274,7 @@ export const de: Messages = {
       time: "Zeit",
       installed: "Installiert",
       steps: "Schritte",
+      actions: "Aktionen",
     },
     waitsFor: "wartet auf {names}",
     stoppedBeforeFinished: "vor dem Ende gestoppt",
@@ -438,6 +454,9 @@ export const de: Messages = {
     selectChanges: "Nur Änderungen",
     statuses: { added: "neu", replaced: "ersetzt", identical: "identisch" },
     planCounts: "{added} neu · {replaced} ersetzt · {identical} identisch · {skipped} durch Muster übersprungen",
+    onlyHere: "{count} nur auf diesem Rechner",
+    onlyHereHint:
+      "Diese Dateien gibt es im Zielprojekt, aber nicht im empfangenen Ordner. Sie wurden auf dem anderen Rechner vielleicht gelöscht und kommen nach dem Zusammenführen zum Entfernen in Frage. Nichts wird automatisch gelöscht.",
     receivedTitle: "Empfangen",
     receivedInto: "{added} neu und {replaced} ersetzt in {target}",
     logWritten: "Protokoll geschrieben nach {path}",

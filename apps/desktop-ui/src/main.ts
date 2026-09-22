@@ -3,6 +3,7 @@ import { createPinia } from "pinia";
 
 import App from "./App.vue";
 import { reportError } from "./api/commands";
+import { ripple } from "./directives/ripple";
 import { i18n } from "./i18n";
 import { router } from "./router";
 import { useUiStore } from "./stores/ui";
@@ -35,5 +36,6 @@ app.config.errorHandler = (error, _instance, info) => {
 };
 
 app.use(createPinia()).use(i18n).use(router);
+app.directive("ripple", ripple);
 useUiStore();
 app.mount("#app");

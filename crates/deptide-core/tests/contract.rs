@@ -1,6 +1,6 @@
 use deptide_core::domain::{
     Diagnosis, ExecutionMode, InstalledPackage, Job, JobSnapshot, JobStatus, PackageSpec, RunPlan,
-    StepName, StepTiming,
+    StepName, StepTiming, VersionPolicy,
 };
 use deptide_core::execution::{JobState, RunEvent, RunOptions, RunState};
 
@@ -22,6 +22,7 @@ fn job_snapshot_uses_the_camel_case_names_the_frontend_expects() {
         audit_fix_args: vec![],
         depends_on: vec!["core".to_string()],
         command: None,
+        version: VersionPolicy::default(),
     });
     state.record_step(StepName::ForceInstall, 5);
     state.installed.push(InstalledPackage {

@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use common::{manifest, TempDir};
-use deptide_core::domain::{DetectedProject, ExecutionMode, Job, JobStatus, PackageSpec, StepName};
+use deptide_core::domain::{
+    DetectedProject, ExecutionMode, Job, JobStatus, PackageSpec, StepName, VersionPolicy,
+};
 use deptide_core::execution::{
     diff_dependencies, execute_run, read_top_level_versions, restore_project, ProgressSink,
     RunContext, RunEvent, RunOptions,
@@ -47,6 +49,7 @@ fn job(name: &str, directory: std::path::PathBuf, depends_on: Vec<&str>) -> Job 
         audit_fix_args: vec![],
         depends_on: depends_on.into_iter().map(String::from).collect(),
         command: None,
+        version: VersionPolicy::default(),
     }
 }
 

@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::domain::{ConfiguredProject, Job, PackageSpec, RunPlan, StepName, UpdateConfig};
+use crate::domain::{
+    ConfiguredProject, Job, PackageSpec, RunPlan, StepName, UpdateConfig, VersionPolicy,
+};
 use crate::scan::read_package_manifest;
 use crate::workspace::Workspace;
 
@@ -187,6 +189,7 @@ pub fn build_jobs(workspace: &Workspace, config: &UpdateConfig, plan: &RunPlan) 
             audit_fix_args: config.audit_fix_args.clone(),
             depends_on: local_dependencies(manifest.as_ref(), &providers, &project.name),
             command: None,
+            version: plan.version,
         });
     }
 
@@ -222,6 +225,7 @@ pub fn build_command_jobs(
                 audit_fix_args: Vec::new(),
                 depends_on: Vec::new(),
                 command: Some(command.to_string()),
+                version: VersionPolicy::default(),
             }),
             None => missing.push(name.clone()),
         }

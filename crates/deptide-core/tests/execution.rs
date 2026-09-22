@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use common::{manifest, TempDir};
 use deptide_core::domain::{
     ConfiguredProject, ExecutionMode, JobStatus, PackageSpec, RunPlan, StepName, UpdateConfig,
+    VersionBump, VersionPolicy,
 };
 use deptide_core::execution::{
     build_jobs, execute_run, list_summaries, ProgressSink, RunContext, RunEvent, RunLogger,
@@ -34,6 +35,7 @@ fn plan_for(names: &[&str], packages: Vec<PackageSpec>, mode: ExecutionMode) -> 
         extra_install_args: vec!["--force".to_string()],
         label: "test run".to_string(),
         save_as: None,
+        version: VersionPolicy::default(),
     }
 }
 
@@ -331,6 +333,7 @@ async fn a_consumer_is_skipped_when_its_library_fails() {
         audit_fix_args: vec![],
         depends_on: depends_on.into_iter().map(String::from).collect(),
         command: None,
+        version: VersionPolicy::default(),
     };
 
     let sink = Arc::new(RecordingSink::default());
@@ -369,4 +372,63 @@ async fn an_aborted_run_skips_everything() {
         .iter()
         .all(|job| job.status == JobStatus::Skipped));
     assert_eq!(snapshot.summary.unwrap().skipped_count, 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_version_step_is_skipped_without_a_main_branch_to_compare_with() {
+    let root = TempDir::new("version-skip");
+    root.write("repos/web/package.json", &manifest("web", "1.0.0", &[]));
+
+    let job = deptide_core::domain::Job {
+        name: "web".to_string(),
+        directory: root.join("repos/web"),
+        packages: vec![PackageSpec::new("left-pad", "1.3.0")],
+        steps: vec![StepName::Version],
+        install_args: vec![],
+        audit_fix_args: vec![],
+        depends_on: vec![],
+        command: None,
+        version: VersionPolicy {
+            bump: VersionBump::Minor,
+            only_if_same_as_main: true,
+        },
+    };
+
+    let sink = Arc::new(RecordingSink::default());
+    let context = RunContext::new(
+        "run-version".to_string(),
+        "version".to_string(),
+        vec![job],
+        RunOptions {
+            concurrency: 1,
+            mode: ExecutionMode::PerProject,
+            dry_run: false,
+        },
+        sink.clone(),
+        None,
+    );
+
+    let snapshot = execute_run(context).await;
+
+    assert_eq!(snapshot.jobs[0].status, JobStatus::Ok);
+    assert!(
+        std::fs::read_to_string(root.join("repos/web/package.json"))
+            .unwrap()
+            .contains("1.0.0"),
+        "no npm version runs when main cannot be read"
+    );
+    let logs: Vec<String> = sink
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            RunEvent::LogLine { line, .. } => Some(line.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        logs.iter().any(|line| line.contains("bump skipped")),
+        "expected a skip reason in {logs:?}"
+    );
 }

@@ -144,6 +144,19 @@ onBeforeUnmount(() => transfer.stopWatching());
             <span class="mono muted size">{{ formatBytes(file.size) }}</span>
           </label>
         </div>
+        <details v-if="project.onlyInTarget.length" class="only-here">
+          <summary>
+            <AppIcon name="warning" :size="14" />
+            {{ t("transfer.onlyHere", { count: project.onlyInTarget.length }) }}
+          </summary>
+          <p class="muted small">{{ t("transfer.onlyHereHint") }}</p>
+          <div class="list files">
+            <div v-for="file in project.onlyInTarget" :key="file.relative" class="list-row file plain">
+              <span class="mono truncate path">{{ file.relative }}</span>
+              <span class="mono muted size">{{ formatBytes(file.size) }}</span>
+            </div>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -222,6 +235,24 @@ onBeforeUnmount(() => transfer.stopWatching());
   font-size: 11.5px;
   min-width: 64px;
   text-align: right;
+}
+
+.only-here summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--warn);
+  font-size: 13px;
+  user-select: none;
+}
+
+.only-here p {
+  margin: 6px 0 8px;
+}
+
+.file.plain {
+  cursor: default;
 }
 
 .results {

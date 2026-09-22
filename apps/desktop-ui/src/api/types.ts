@@ -1,4 +1,16 @@
-export type StepName = "uninstall" | "install" | "force-install" | "audit" | "build";
+export type StepName = "uninstall" | "install" | "force-install" | "version" | "audit" | "build";
+
+export type VersionBump = "patch" | "minor" | "major";
+
+export const allBumps: readonly VersionBump[] = ["patch", "minor", "major"];
+
+export interface VersionPolicy {
+  bump: VersionBump;
+  /// Only bump a project whose version still equals the one on the main branch.
+  onlyIfSameAsMain: boolean;
+}
+
+export const defaultVersionPolicy: VersionPolicy = { bump: "patch", onlyIfSameAsMain: false };
 
 export type ExecutionMode = "per-project" | "per-step";
 
@@ -69,6 +81,7 @@ export interface SavedRun {
   concurrency: number;
   mode: ExecutionMode;
   extraInstallArgs: string[];
+  version: VersionPolicy;
 }
 
 export interface SavedRunFile {
@@ -197,6 +210,11 @@ export interface ReceiveFile {
   size: number;
 }
 
+export interface TargetOnlyFile {
+  relative: string;
+  size: number;
+}
+
 export interface ReceiveProjectPlan {
   source: string;
   target: string;
@@ -206,6 +224,8 @@ export interface ReceiveProjectPlan {
   added: number;
   replaced: number;
   identical: number;
+  /// Present in the target project but not in the received folder. Never deleted by Deptide.
+  onlyInTarget: TargetOnlyFile[];
 }
 
 export interface ReceivePlan {
@@ -301,6 +321,7 @@ export interface RunPlan {
   extraInstallArgs: string[];
   label: string;
   saveAs: string | null;
+  version: VersionPolicy;
 }
 
 export interface RunStartOutcome {
@@ -355,7 +376,7 @@ export type RunEvent =
   | { type: "phaseChanged"; runId: string; phase: StepName | null }
   | { type: "finished"; runId: string; snapshot: RunSnapshot };
 
-export const allSteps: readonly StepName[] = ["uninstall", "install", "force-install", "audit", "build"];
+export const allSteps: readonly StepName[] = ["uninstall", "install", "force-install", "version", "audit", "build"];
 
 export const fullSteps: readonly StepName[] = ["uninstall", "install", "audit", "build"];
 

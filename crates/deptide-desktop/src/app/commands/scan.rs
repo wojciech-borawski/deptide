@@ -5,18 +5,16 @@ use crate::app::dto::{ProjectInspection, ScanResult, ScannedProject};
 use deptide_core::domain::{DetectedProject, Settings};
 use deptide_core::error::{AppError, AppResult};
 use deptide_core::scan::{
-    apply_scan_selection, build_ignored_directories, collect_dependency_candidates,
-    detect_projects, read_project_at, DetectionOptions, ScanSelectionOutcome,
+    apply_scan_selection, collect_dependency_candidates, detect_projects, read_project_at,
+    DetectionOptions, ScanSelectionOutcome,
 };
 use deptide_core::workspace::{
     load_settings, normalize_directory, open_with_config, save_config as write_config, Workspace,
 };
 
-fn detection_options(settings: &Settings) -> DetectionOptions {
-    DetectionOptions {
-        max_depth: settings.scan_depth,
-        ignored_directories: build_ignored_directories(&settings.extra_ignored_directories),
-    }
+fn detection_options(settings: &Settings, workspace: &Workspace) -> DetectionOptions {
+    DetectionOptions::new(settings.scan_depth, &settings.extra_ignored_directories)
+        .excluding(workspace.internal_directories())
 }
 
 fn projects_root(settings: &Settings) -> AppResult<PathBuf> {
@@ -52,7 +50,7 @@ pub async fn scan_projects(root: String) -> AppResult<ScanResult> {
     let (workspace, config) = open_with_config(&root)?;
     let settings = load_settings(&workspace);
     let projects_root = projects_root(&settings)?;
-    let options = detection_options(&settings);
+    let options = detection_options(&settings, &workspace);
 
     let scan_root = projects_root.clone();
     let detected = on_blocking_thread(move || Ok(detect_projects(&scan_root, &options))).await?;
@@ -109,7 +107,7 @@ pub async fn inspect_projects(
     let relative_root = scan_root
         .clone()
         .unwrap_or_else(|| workspace.root().to_path_buf());
-    let options = detection_options(&settings);
+    let options = detection_options(&settings, &workspace);
     let branch_pattern = settings.branch_suffix_pattern.clone();
 
     let selected: Vec<(PathBuf, String)> = config

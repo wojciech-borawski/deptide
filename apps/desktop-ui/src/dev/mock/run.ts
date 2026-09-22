@@ -31,6 +31,7 @@ function sampleLine(step: StepName, index: number): string {
       "changed 2 packages, and audited 654 packages in 5s",
       "found 0 vulnerabilities",
     ],
+    version: ["v1.4.1", "version 1.4.0 -> 1.4.1"],
     audit: ["up to date, audited 654 packages in 1s", "found 0 vulnerabilities"],
     build: [
       "vite v7.1.0 building for production...",

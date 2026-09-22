@@ -1,10 +1,13 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::files::{collect_files, copy_file, same_content, to_posix};
+use super::files::{collect_files, copy_file, same_content, to_posix, Collection};
 use crate::error::AppResult;
 use crate::scan::{read_project_at, MANIFEST_FILE_NAME};
+
+const NODE_MODULES_DIRECTORY: &str = "node_modules";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -22,6 +25,16 @@ pub struct ReceiveFile {
     pub size: u64,
 }
 
+/// A file that exists in the target project but not in the received folder:
+/// it may have been deleted on the other machine and is a candidate for
+/// removal after the merge. Deptide never deletes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetOnlyFile {
+    pub relative: String,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiveProjectPlan {
@@ -33,6 +46,8 @@ pub struct ReceiveProjectPlan {
     pub added: usize,
     pub replaced: usize,
     pub identical: usize,
+    #[serde(default)]
+    pub only_in_target: Vec<TargetOnlyFile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,9 +137,43 @@ pub fn analyze(
         added: count(FileStatus::Added),
         replaced: count(FileStatus::Replaced),
         identical: count(FileStatus::Identical),
+        only_in_target: files_only_in_target(&collection, target_directory, patterns),
         files,
         skipped: collection.skipped,
     }
+}
+
+/// Files the target project has that the received folder does not, judged
+/// with the same ignore rules as the received files so that build output and
+/// git-ignored files do not show up as candidates.
+fn files_only_in_target(
+    received: &Collection,
+    target_directory: &Path,
+    patterns: &[String],
+) -> Vec<TargetOnlyFile> {
+    if !target_directory.is_dir() {
+        return Vec::new();
+    }
+
+    let received_paths: HashSet<&Path> = received
+        .files
+        .iter()
+        .map(|file| file.relative.as_path())
+        .collect();
+
+    // A target without its own .gitignore would otherwise list node_modules.
+    let mut target_patterns: Vec<String> = patterns.to_vec();
+    target_patterns.push(format!("{NODE_MODULES_DIRECTORY}/"));
+
+    collect_files(target_directory, &target_patterns, true)
+        .files
+        .into_iter()
+        .filter(|file| !received_paths.contains(file.relative.as_path()))
+        .map(|file| TargetOnlyFile {
+            relative: to_posix(&file.relative),
+            size: file.size,
+        })
+        .collect()
 }
 
 pub fn apply(

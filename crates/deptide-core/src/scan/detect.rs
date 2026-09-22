@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use super::git::current_branch;
 use crate::domain::{DetectedProject, PackageManifest};
 use crate::util::json::read_json;
-use crate::workspace::{relative_path, to_posix};
+use crate::workspace::{lexical_normalize, normalize_directory, relative_path, to_posix};
 
 pub const MANIFEST_FILE_NAME: &str = "package.json";
 pub const BUILD_SCRIPT_NAME: &str = "build";
@@ -34,6 +34,36 @@ pub const DEFAULT_IGNORED_DIRECTORIES: &[&str] = &[
 pub struct DetectionOptions {
     pub max_depth: u32,
     pub ignored_directories: HashSet<String>,
+    /// Folders that are never entered, by path: the workspace's own backups,
+    /// transfer records and logs hold copies of `package.json` that are not
+    /// projects.
+    pub excluded_paths: Vec<PathBuf>,
+}
+
+impl DetectionOptions {
+    pub fn new(max_depth: u32, extra_ignored_directories: &[String]) -> Self {
+        Self {
+            max_depth,
+            ignored_directories: build_ignored_directories(extra_ignored_directories),
+            excluded_paths: Vec::new(),
+        }
+    }
+
+    pub fn excluding(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.excluded_paths
+            .extend(paths.into_iter().map(|path| lexical_normalize(&path)));
+        self
+    }
+
+    fn is_excluded(&self, directory: &Path) -> bool {
+        if self.excluded_paths.is_empty() {
+            return false;
+        }
+        let wanted = normalize_directory(directory);
+        self.excluded_paths
+            .iter()
+            .any(|path| normalize_directory(path) == wanted)
+    }
 }
 
 pub fn build_ignored_directories(extra: &[String]) -> HashSet<String> {
@@ -144,7 +174,8 @@ pub fn detect_projects(root: &Path, options: &DetectionOptions) -> Vec<DetectedP
                 }
 
                 let name = entry.file_name().to_string_lossy().to_string();
-                if options.ignored_directories.contains(&name) {
+                if options.ignored_directories.contains(&name) || options.is_excluded(&entry.path())
+                {
                     continue;
                 }
 

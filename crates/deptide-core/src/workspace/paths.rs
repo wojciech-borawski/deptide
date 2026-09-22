@@ -71,6 +71,17 @@ impl Workspace {
         self.root.join(LOGS_DIRECTORY)
     }
 
+    /// The folders Deptide itself writes into. They can hold `package.json`
+    /// copies (backups, staged transfers) that must not be detected as projects.
+    pub fn internal_directories(&self) -> Vec<PathBuf> {
+        vec![
+            self.backups_directory(),
+            self.transfers_directory(),
+            self.logs_directory(),
+            self.runs_directory(),
+        ]
+    }
+
     pub fn resolve_project(&self, configured_path: &str) -> PathBuf {
         lexical_normalize(&self.config_directory().join(configured_path))
     }

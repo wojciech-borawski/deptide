@@ -64,12 +64,15 @@ reopened automatically at start.
 
 Missing or malformed values fall back to defaults instead of failing. The
 scan always skips `node_modules`, `.git`, `dist`, `build`, `coverage` and the
-other folder names listed in `scan/detect.rs`.
+other folder names listed in `scan/detect.rs`. The workspace's own
+`backups/`, `transfers/`, `runs/` and `logs/` folders are skipped as well, so
+the `package.json` copies kept there never show up as projects.
 
 ## Saved runs
 
 A saved run records the selected project names, the exact package versions,
-steps, order, concurrency and extra install flags. Loading one in the History
+steps, order, concurrency, extra install flags and the version-bump policy
+(`version: { bump, onlyIfSameAsMain }`, defaulting to a patch bump). Loading one in the History
 screen pre-fills the wizard and jumps to the review step, so anything can still
 be changed before starting.
 

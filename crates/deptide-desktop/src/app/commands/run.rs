@@ -99,6 +99,18 @@ fn update_log_header(
         format!("concurrency: {}", plan.concurrency),
     ];
 
+    if steps.contains(&StepName::Version) {
+        let condition = if plan.version.only_if_same_as_main {
+            " (only when still equal to main)"
+        } else {
+            ""
+        };
+        header.push(format!(
+            "version:     {}{condition}",
+            plan.version.bump.label()
+        ));
+    }
+
     if plan.dry_run {
         header.push("mode:        dry run".to_string());
     }
@@ -125,6 +137,7 @@ fn save_plan_if_requested(workspace: &Workspace, plan: &RunPlan) -> AppResult<Op
         concurrency: plan.concurrency,
         mode: plan.mode,
         extra_install_args: plan.extra_install_args.clone(),
+        version: plan.version,
     };
 
     save_run(workspace, &saved).map(Some)

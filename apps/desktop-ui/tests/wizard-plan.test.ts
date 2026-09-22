@@ -44,6 +44,8 @@ function draft(overrides: Partial<WizardDraft> = {}): WizardDraft {
     concurrency: 4,
     dryRun: false,
     extraInstallArgs: "  --force   --legacy-peer-deps ",
+    versionBump: "minor",
+    bumpOnlyIfSameAsMain: true,
     label: "  ",
     saveRun: true,
     saveName: "",
@@ -93,6 +95,7 @@ describe("buildRunPlan", () => {
 
     expect(plan.steps).toEqual(["uninstall", "install"]);
     expect(plan.extraInstallArgs).toEqual(["--force", "--legacy-peer-deps"]);
+    expect(plan.version).toEqual({ bump: "minor", onlyIfSameAsMain: true });
     expect(plan.packages).toEqual([
       { name: "@acme/core", version: "3.1.0-ABC-123", saveDev: false },
       { name: "left-pad", version: "1.3.0", saveDev: false },

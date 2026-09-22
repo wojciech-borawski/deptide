@@ -16,7 +16,7 @@ use staging::create_staging_directory;
 pub use files::{collect_files, copy_collection, same_content, Collection};
 pub use receive::{
     analyze, apply, is_project_folder, suggest_target, FileStatus, KnownProject, ReceiveFile,
-    ReceiveProjectPlan, ReceiveProjectResult, ReceiveSelection,
+    ReceiveProjectPlan, ReceiveProjectResult, ReceiveSelection, TargetOnlyFile,
 };
 
 use crate::domain::UpdateConfig;

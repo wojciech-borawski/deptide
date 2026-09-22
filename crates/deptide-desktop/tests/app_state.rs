@@ -2,7 +2,7 @@ mod common;
 
 use std::sync::Arc;
 
-use deptide_core::domain::{ExecutionMode, Job, PackageSpec, StepName};
+use deptide_core::domain::{ExecutionMode, Job, PackageSpec, StepName, VersionPolicy};
 use deptide_core::execution::{execute_run, ProgressSink, RunContext, RunEvent, RunOptions};
 use deptide_desktop::app::state::AppState;
 
@@ -22,6 +22,7 @@ fn dry_run_context(id: &str) -> Arc<RunContext> {
         audit_fix_args: vec![],
         depends_on: vec![],
         command: None,
+        version: VersionPolicy::default(),
     };
 
     RunContext::new(

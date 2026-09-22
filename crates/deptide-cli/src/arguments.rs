@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use deptide_core::domain::{ExecutionMode, StepName};
+use deptide_core::domain::{ExecutionMode, StepName, VersionBump};
 
 #[derive(Parser)]
 #[command(
@@ -77,6 +77,18 @@ pub struct RunArgs {
     pub concurrency: Option<u32>,
     #[arg(long, help = "Log what would happen without touching any project")]
     pub dry_run: bool,
+    #[arg(
+        long,
+        value_enum,
+        default_value = "patch",
+        help = "Which part of each project's own version the version step raises"
+    )]
+    pub bump: BumpArg,
+    #[arg(
+        long,
+        help = "Let the version step bump only projects whose version still equals the one on the main branch"
+    )]
+    pub bump_only_if_same_as_main: bool,
     #[arg(long, help = "Label for the transcript and the history entry")]
     pub label: Option<String>,
     #[arg(
@@ -139,6 +151,7 @@ pub enum StepArg {
     Install,
     #[value(name = "force-install")]
     ForceInstall,
+    Version,
     Audit,
     Build,
 }
@@ -149,8 +162,26 @@ impl From<StepArg> for StepName {
             StepArg::Uninstall => StepName::Uninstall,
             StepArg::Install => StepName::Install,
             StepArg::ForceInstall => StepName::ForceInstall,
+            StepArg::Version => StepName::Version,
             StepArg::Audit => StepName::Audit,
             StepArg::Build => StepName::Build,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum BumpArg {
+    Patch,
+    Minor,
+    Major,
+}
+
+impl From<BumpArg> for VersionBump {
+    fn from(bump: BumpArg) -> Self {
+        match bump {
+            BumpArg::Patch => VersionBump::Patch,
+            BumpArg::Minor => VersionBump::Minor,
+            BumpArg::Major => VersionBump::Major,
         }
     }
 }

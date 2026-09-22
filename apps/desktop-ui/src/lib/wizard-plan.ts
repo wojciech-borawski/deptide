@@ -1,4 +1,4 @@
-import type { DependencyCandidate, ExecutionMode, PackageSpec, RunPlan, StepName } from "@/api/types";
+import type { DependencyCandidate, ExecutionMode, PackageSpec, RunPlan, StepName, VersionBump } from "@/api/types";
 import { allSteps } from "@/api/types";
 import { applySuffix, isValidSuffix, stripPrerelease } from "./versions";
 
@@ -33,6 +33,8 @@ export interface WizardDraft {
   concurrency: number;
   dryRun: boolean;
   extraInstallArgs: string;
+  versionBump: VersionBump;
+  bumpOnlyIfSameAsMain: boolean;
   label: string;
   saveRun: boolean;
   saveName: string;
@@ -143,6 +145,7 @@ export function buildRunPlan(draft: WizardDraft): RunPlan {
     extraInstallArgs: parseArguments(draft.extraInstallArgs),
     label,
     saveAs: draft.saveRun ? saveName : null,
+    version: { bump: draft.versionBump, onlyIfSameAsMain: draft.bumpOnlyIfSameAsMain },
   };
 }
 

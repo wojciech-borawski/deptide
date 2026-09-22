@@ -33,10 +33,16 @@ async function save(): Promise<void> {
   const config = workspace.config;
   if (!config) return;
 
+  // Read both forms before the first await: saving the settings replaces the
+  // workspace snapshot, which re-loads the draft from the old config and would
+  // otherwise wipe the edited npm arguments and transfer patterns.
+  const settings = draft.toSettings();
+  const nextConfig = draft.toConfig(config);
+
   message.value = "";
   await saveAction.run(async () => {
-    await workspace.updateSettings(draft.toSettings());
-    await workspace.updateConfig(draft.toConfig(config));
+    await workspace.updateSettings(settings);
+    await workspace.updateConfig(nextConfig);
     message.value = t("settings.saved");
     loadDraft();
   });

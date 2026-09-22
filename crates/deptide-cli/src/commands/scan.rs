@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use deptide_core::error::{AppError, AppResult};
-use deptide_core::scan::{
-    apply_scan_selection, build_ignored_directories, detect_projects, DetectionOptions,
-};
+use deptide_core::scan::{apply_scan_selection, detect_projects, DetectionOptions};
 use deptide_core::workspace::{load_settings, open_with_config, save_config};
 
 use crate::arguments::ScanArgs;
@@ -20,10 +18,8 @@ pub fn execute(args: ScanArgs) -> AppResult<ExitCode> {
         ));
     }
 
-    let options = DetectionOptions {
-        max_depth: settings.scan_depth,
-        ignored_directories: build_ignored_directories(&settings.extra_ignored_directories),
-    };
+    let options = DetectionOptions::new(settings.scan_depth, &settings.extra_ignored_directories)
+        .excluding(workspace.internal_directories());
     let detected = detect_projects(root, &options);
 
     for project in &detected {

@@ -1,4 +1,4 @@
-use crate::domain::{Job, PackageSpec, StepName};
+use crate::domain::{Job, PackageSpec, StepName, VersionBump};
 use crate::scan::BUILD_SCRIPT_NAME;
 use crate::util::text::describe_count;
 
@@ -74,6 +74,17 @@ pub fn plan_build() -> PlannedCommand {
     }
 }
 
+pub fn plan_version_bump(bump: VersionBump) -> PlannedCommand {
+    PlannedCommand {
+        label: format!("version {}", bump.label()),
+        args: vec![
+            "version".to_string(),
+            bump.label().to_string(),
+            "--no-git-tag-version".to_string(),
+        ],
+    }
+}
+
 pub fn dry_run_lines(job: &Job, step: StepName) -> Vec<String> {
     match step {
         StepName::Uninstall => {
@@ -93,6 +104,17 @@ pub fn dry_run_lines(job: &Job, step: StepName) -> Vec<String> {
                     format!("would install {}{flag}{force}", spec.to_spec())
                 })
                 .collect()
+        }
+        StepName::Version => {
+            let condition = if job.version.only_if_same_as_main {
+                " if it still equals the version on main"
+            } else {
+                ""
+            };
+            vec![format!(
+                "would bump the {} version{condition}",
+                job.version.bump.label()
+            )]
         }
         StepName::Audit => vec!["would run npm audit fix".to_string()],
         StepName::Build => vec!["would run npm run build".to_string()],

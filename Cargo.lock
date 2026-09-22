@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "deptide"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "deptide-core",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "deptide-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "clap",
  "deptide-core",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "deptide-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "arboard",
  "chrono",

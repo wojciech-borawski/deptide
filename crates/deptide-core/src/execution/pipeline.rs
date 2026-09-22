@@ -8,14 +8,17 @@ use super::command::{describe_exit_code, npm_program, run_command, CommandOutcom
 use super::diagnose::diagnose;
 use super::state::{JobState, RunEvent};
 use super::steps::{
-    dry_run_lines, plan_audit_fix, plan_build, plan_install, plan_uninstall, PlannedCommand,
+    dry_run_lines, plan_audit_fix, plan_build, plan_install, plan_uninstall, plan_version_bump,
+    PlannedCommand,
 };
 use super::verify::{
     describe_installed, diff_dependencies, read_top_level_versions, verify_installed,
 };
 use super::RunContext;
 use crate::domain::{Job, JobStatus, StepName};
-use crate::scan::{read_project_at, MANIFEST_FILE_NAME};
+use crate::scan::{
+    read_package_manifest, read_project_at, version_on_main_branch, MANIFEST_FILE_NAME,
+};
 use crate::util::text::describe_count;
 
 const TRANSIENT_CODES: &[&str] = &["ENETWORK", "EINTEGRITY"];
@@ -216,6 +219,50 @@ impl JobRunner {
         Ok(())
     }
 
+    async fn step_version(&self, job: &Job) -> Result<(), StepError> {
+        let before = read_package_manifest(&job.directory).and_then(|manifest| manifest.version);
+        let current = before.as_deref().unwrap_or("none");
+
+        if job.version.only_if_same_as_main {
+            let directory = job.directory.clone();
+            let on_main = tokio::task::spawn_blocking(move || version_on_main_branch(&directory))
+                .await
+                .unwrap_or(None);
+
+            match on_main {
+                Some(main) if before.as_deref() == Some(main.as_str()) => {
+                    self.append_log(format!("version {current} still equals main, bumping"));
+                }
+                Some(main) => {
+                    self.append_log(format!(
+                        "version {current} already differs from main ({main}), bump skipped"
+                    ));
+                    return Ok(());
+                }
+                None => {
+                    self.append_log(
+                        "could not read the version on the main branch, bump skipped".to_string(),
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
+        let outcome = self.run_npm(plan_version_bump(job.version.bump)).await?;
+        if outcome.code != Some(0) {
+            return Err(StepError::Failure(format!(
+                "npm version exited with code {}",
+                describe_exit_code(outcome.code)
+            )));
+        }
+
+        let after = read_package_manifest(&job.directory)
+            .and_then(|manifest| manifest.version)
+            .unwrap_or_else(|| "unknown".to_string());
+        self.append_log(format!("version {current} -> {after}"));
+        Ok(())
+    }
+
     fn verify(&self, job: &Job) {
         let installed = verify_installed(&job.directory, &job.packages);
         let mismatches: Vec<String> = installed
@@ -300,6 +347,7 @@ impl JobRunner {
             StepName::Uninstall => self.step_uninstall(job).await,
             StepName::Install => self.step_install(job, false).await,
             StepName::ForceInstall => self.step_install(job, true).await,
+            StepName::Version => self.step_version(job).await,
             StepName::Audit => self.step_audit(job).await,
             StepName::Build => self.step_build(job).await,
         }

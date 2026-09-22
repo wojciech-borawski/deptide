@@ -40,8 +40,13 @@ async function startRun(): Promise<void> {
   const outcome = await run.start(workspace.root, wizard.plan);
   if (!outcome) return;
 
-  await workspace.refresh();
+  // Leave the wizard before refreshing the workspace: the review step shows a
+  // "run in progress" banner as soon as the run starts, which used to flash
+  // while the refresh was still awaited. Then hand the wizard back fresh, so
+  // "Update" is a new configuration and reruns live in the Run view.
   await router.push({ name: routeNames.run });
+  startOver();
+  void workspace.refresh();
 }
 
 function startOver(): void {

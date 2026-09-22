@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, Weak};
 use common::TempDir;
 use deptide_core::domain::{
     ConfiguredProject, ExecutionMode, JobStatus, PackageSpec, RunPlan, StepName, UpdateConfig,
+    VersionPolicy,
 };
 use deptide_core::execution::{
     build_jobs, execute_run, ProgressSink, RunContext, RunEvent, RunOptions,
@@ -71,6 +72,7 @@ fn plan(steps: Vec<StepName>) -> RunPlan {
         extra_install_args: vec![],
         label: "npm real".to_string(),
         save_as: None,
+        version: VersionPolicy::default(),
     }
 }
 

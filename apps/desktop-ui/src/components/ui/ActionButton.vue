@@ -19,6 +19,7 @@ const props = withDefaults(
 
 <template>
   <button
+    v-ripple
     class="btn"
     :class="{ [`btn-${props.variant}`]: props.variant !== 'default', 'btn-sm': props.small }"
     :type="props.type"

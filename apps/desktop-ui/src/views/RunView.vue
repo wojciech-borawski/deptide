@@ -19,6 +19,7 @@ import { describeError } from "@/composables/useAsyncAction";
 import { buildBaseline } from "@/lib/timing-baseline";
 import { routeNames } from "@/router";
 import { useRunStore } from "@/stores/run";
+import { useToastStore } from "@/stores/toasts";
 import { useWizardStore } from "@/stores/wizard";
 import { useWorkspaceStore } from "@/stores/workspace";
 
@@ -31,7 +32,7 @@ const { t } = useI18n();
 const baseline = computed(() => buildBaseline(workspace.history, run.summary?.startedAt));
 const rerunOpen = ref(false);
 const rerunPreselected = ref<string[]>([]);
-const notice = ref("");
+const toasts = useToastStore();
 
 const snapshot = computed(() => run.snapshot);
 const nowMs = computed(() => (snapshot.value ? snapshot.value.startedAtMs + run.elapsedMs : 0));
@@ -82,9 +83,9 @@ async function startRerun(projectNames: string[], steps: StepName[]): Promise<vo
 async function restore(name: string): Promise<void> {
   try {
     const files = await run.restoreProject(name);
-    notice.value = t("run.restored", { files: files.join(", "), name });
+    toasts.push({ tone: "ok", text: t("run.restored", { files: files.join(", "), name }) });
   } catch (cause) {
-    notice.value = describeError(cause);
+    toasts.push({ tone: "error", text: describeError(cause) });
   }
 }
 </script>
@@ -145,7 +146,6 @@ async function restore(name: string): Promise<void> {
           {{ t("run.withoutPackages", { names: run.lastStartOutcome.withoutPackages.join(", ") }) }}
         </NoticeBanner>
         <NoticeBanner v-if="run.error" tone="error" selectable>{{ run.error }}</NoticeBanner>
-        <NoticeBanner v-if="notice" tone="info" selectable>{{ notice }}</NoticeBanner>
 
         <RunSummaryCard
           v-if="run.summary"

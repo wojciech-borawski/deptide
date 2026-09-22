@@ -41,6 +41,7 @@ const plan: RunPlan = {
   extraInstallArgs: [],
   label: "test",
   saveAs: null,
+  version: { bump: "patch", onlyIfSameAsMain: false },
 };
 
 function emit(event: RunEvent): void {

@@ -36,7 +36,11 @@ be added here as well.
 each as new, replaced or identical (by size and SHA-256). New and replaced
 files are ticked, identical ones are not; any file can be unticked. "Replace
 selected files" copies exactly the ticked files into the target folders and
-never deletes anything. The result panel lists what landed per project, and
+never deletes anything. Files that exist in the target project but not in the
+received folder are listed separately under "only on this machine" (judged with
+the same ignore rules, so build output and `node_modules` do not appear); they
+may have been deleted on the other side and are candidates for manual removal
+after the merge. The result panel lists what landed per project, and
 `transfers/<stamp>-receive.json` records the same.
 
 Paths containing `..` are rejected, so a crafted folder on the clipboard cannot

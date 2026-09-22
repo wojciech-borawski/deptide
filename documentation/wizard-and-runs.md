@@ -24,7 +24,12 @@
    combined, how many projects run in parallel, a dry-run switch and extra
    `npm install` flags. The steps are uninstall, install, force install
    (`npm install <versions> --force`, which refetches a version npm already
-   has), audit fix and build. Presets: Full (uninstall, install, audit, build),
+   has), bump version, audit fix and build. Bump version runs
+   `npm version patch|minor|major --no-git-tag-version` on the project itself;
+   it can be limited to projects whose version still equals the one on the
+   `main` (or `master`) branch, so a project already bumped on the current
+   branch is left alone. Without a git checkout to compare with, the step logs
+   why it skipped and the project still counts as ok. Presets: Full (uninstall, install, audit, build),
    Simple (uninstall, install) and Force (force install, audit, build).
 4. **Review.** Everything in one place, a label for the log file, and the
    choice to save the run for later.

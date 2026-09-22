@@ -3,17 +3,13 @@ mod common;
 use common::{manifest, TempDir};
 use deptide_core::domain::{ConfiguredProject, UpdateConfig};
 use deptide_core::scan::{
-    apply_scan_selection, apply_suffix, build_ignored_directories, collect_dependency_candidates,
-    detect_projects, find_duplicate_groups, propose_name, read_project_at, strip_prerelease,
-    DetectionOptions,
+    apply_scan_selection, apply_suffix, collect_dependency_candidates, detect_projects,
+    find_duplicate_groups, propose_name, read_project_at, strip_prerelease, DetectionOptions,
 };
 use deptide_core::workspace::Workspace;
 
 fn options(depth: u32) -> DetectionOptions {
-    DetectionOptions {
-        max_depth: depth,
-        ignored_directories: build_ignored_directories(&["skip-me".to_string()]),
-    }
+    DetectionOptions::new(depth, &["skip-me".to_string()])
 }
 
 #[test]
@@ -189,4 +185,27 @@ fn duplicate_groups_use_the_resolved_folder() {
 
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].entries, vec!["web", "web-again"]);
+}
+
+#[test]
+fn the_workspace_own_folders_are_never_detected_as_projects() {
+    let root = TempDir::new("scan-internal");
+    root.write("apps/web/package.json", &manifest("web", "1.0.0", &[]));
+    root.write(
+        "tool/backups/web-2026-01-01/package.json",
+        &manifest("web", "0.9.0", &[]),
+    );
+    root.write(
+        "tool/transfers/web/package.json",
+        &manifest("web", "0.9.0", &[]),
+    );
+    let workspace = Workspace::open(root.join("tool")).unwrap();
+
+    let plain = detect_projects(root.path(), &options(4));
+    assert_eq!(plain.len(), 3, "without exclusions the copies are found");
+
+    let options = options(4).excluding(workspace.internal_directories());
+    let found = detect_projects(root.path(), &options);
+    let names: Vec<&str> = found.iter().map(|p| p.relative_path.as_str()).collect();
+    assert_eq!(names, vec!["apps/web"]);
 }

@@ -94,6 +94,7 @@ export async function handleMockCommand(command: string, args: Record<string, un
         concurrency: Number(args.concurrency),
         dryRun: false,
         extraInstallArgs: [],
+        version: { bump: "patch", onlyIfSameAsMain: false },
         label: `cmd: ${String(args.command)}`,
         saveAs: null,
       };
@@ -192,6 +193,10 @@ export async function handleMockCommand(command: string, args: Record<string, un
           added: 1,
           replaced: 2,
           identical: 1,
+          onlyInTarget: [
+            { relative: "src/components/OldPanel.vue", size: 1620 },
+            { relative: "src/legacy.ts", size: 410 },
+          ],
         })),
       };
     case "apply_receive": {

@@ -6,20 +6,22 @@ import { useI18n } from "vue-i18n";
 import type { RunProjectSummary, RunSummary } from "@/api/types";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import StatusBadge from "@/components/ui/StatusBadge.vue";
-import NoticeBanner from "@/components/ui/NoticeBanner.vue";
 import { describeError } from "@/composables/useAsyncAction";
 import { localizeDiagnosis, shortHash } from "@/lib/diagnosis";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { copyReport, saveReport } from "@/lib/report-export";
 import { classifyRunOutcome, outcomeTone } from "@/lib/run-outcome";
 import { slowestStep, type BaselineMap } from "@/lib/timing-baseline";
+import { useToastStore } from "@/stores/toasts";
 
 const props = defineProps<{ summary: RunSummary; baseline: BaselineMap; restorable: string[] }>();
 const emit = defineEmits<{ restore: [name: string] }>();
 const { t, te } = useI18n();
 
-const notice = ref("");
+const toasts = useToastStore();
 const expanded = ref<Set<string>>(new Set());
+
+const hasRestorable = computed(() => props.restorable.length > 0);
 
 const speedup = computed(() => {
   if (!props.summary.totalDurationMs) return null;
@@ -63,18 +65,18 @@ async function revealLog(): Promise<void> {
 async function copyMarkdown(): Promise<void> {
   try {
     await copyReport(props.summary, "markdown");
-    notice.value = t("run.summary.copied");
+    toasts.push({ tone: "ok", text: t("run.summary.copied") });
   } catch (cause) {
-    notice.value = describeError(cause);
+    toasts.push({ tone: "error", text: describeError(cause) });
   }
 }
 
 async function saveAs(format: "markdown" | "html"): Promise<void> {
   try {
     const path = await saveReport(props.summary, format);
-    notice.value = path ? t("run.summary.saved", { path }) : "";
+    if (path) toasts.push({ tone: "ok", text: t("run.summary.saved", { path }) });
   } catch (cause) {
-    notice.value = describeError(cause);
+    toasts.push({ tone: "error", text: describeError(cause) });
   }
 }
 </script>
@@ -116,8 +118,6 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
         {{ t("common.showInFolder") }}
       </button>
     </div>
-    <NoticeBanner v-if="notice" tone="info" selectable>{{ notice }}</NoticeBanner>
-
     <table class="projects selectable">
       <thead>
         <tr>
@@ -126,6 +126,7 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
           <th>{{ t("run.columns.installed") }}</th>
           <th>{{ t("run.columns.steps") }}</th>
           <th class="right">{{ t("run.columns.time") }}</th>
+          <th v-if="hasRestorable" class="right">{{ t("run.columns.actions") }}</th>
         </tr>
       </thead>
       <tbody>
@@ -134,16 +135,6 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
             <div class="row">
               <span>{{ project.name }}</span>
               <span v-if="project.retries" class="badge small">{{ t("run.retried", { count: project.retries }) }}</span>
-              <button
-                v-if="props.restorable.includes(project.name)"
-                class="btn btn-ghost btn-sm"
-                type="button"
-                :title="t('run.restoreTitle')"
-                @click="emit('restore', project.name)"
-              >
-                <AppIcon name="history" :size="13" />
-                {{ t("run.restore") }}
-              </button>
             </div>
             <div v-if="project.error || project.warning" class="detail" :class="project.error ? 'error' : 'warning'">
               {{ project.error || project.warning }}
@@ -199,6 +190,19 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
             </span>
           </td>
           <td class="right mono">{{ formatDuration(project.durationMs) }}</td>
+          <td v-if="hasRestorable" class="right actions">
+            <button
+              v-if="props.restorable.includes(project.name)"
+              v-ripple
+              class="btn btn-ghost btn-sm"
+              type="button"
+              :title="t('run.restoreTitle')"
+              @click="emit('restore', project.name)"
+            >
+              <AppIcon name="history" :size="13" />
+              {{ t("run.restore") }}
+            </button>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -355,5 +359,9 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
   flex-wrap: wrap;
   gap: 4px 12px;
   font-size: 11.5px;
+}
+
+.actions {
+  white-space: nowrap;
 }
 </style>

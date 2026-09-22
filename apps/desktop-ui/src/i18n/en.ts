@@ -60,6 +60,7 @@ export const en = {
     uninstall: "uninstall",
     install: "install",
     "force-install": "force install",
+    version: "bump version",
     audit: "audit",
     build: "build",
   },
@@ -195,6 +196,8 @@ export const en = {
       install: "npm install the chosen versions, dev dependencies with --save-dev",
       "force-install":
         "npm install the chosen versions with --force, refetching even when the version is already present. An alternative to uninstall + install",
+      version:
+        "npm version patch/minor/major on the project itself, without a git tag or commit. Optionally only when the version still equals the one on main",
       audit: "npm audit fix, unresolved vulnerabilities only warn",
       build: "npm run build when the project has a build script",
     },
@@ -207,6 +210,16 @@ export const en = {
     atTheSameTime: "Projects at the same time",
     parallelHint: "3 is a safe default, more is faster but noisier on the disk and network.",
     dryRun: "Dry run: log what would happen, change nothing",
+    bump: {
+      title: "Version bump",
+      patch: "patch",
+      minor: "minor",
+      major: "major",
+      hint: "Runs npm version --no-git-tag-version, so only package.json and the lock file change.",
+      onlyIfSameAsMain: "Only when the version still equals the one on the main branch",
+      onlyIfSameAsMainHint:
+        "Skips projects that were already bumped on this branch. Needs a git checkout with a main or master branch; otherwise the step logs why it skipped.",
+    },
     flags: "Extra npm install flags",
     flagsHint:
       "Added after the flags from the configuration file. --force makes npm refetch a prerelease that keeps its version but changed content.",
@@ -222,6 +235,8 @@ export const en = {
     parallel: "Parallel",
     atATime: "{count} at a time",
     installFlags: "Install flags",
+    versionBump: "Version bump",
+    onlyIfSameAsMain: "only when equal to main",
     mode: "Mode",
     label: "Run label",
     labelHint: "Used for the log file name and the history.",
@@ -251,6 +266,7 @@ export const en = {
       time: "Time",
       installed: "Installed",
       steps: "Steps",
+      actions: "Actions",
     },
     waitsFor: "waits for {names}",
     stoppedBeforeFinished: "stopped before it finished",
@@ -423,6 +439,9 @@ export const en = {
     selectChanges: "Only changes",
     statuses: { added: "new", replaced: "replaced", identical: "identical" },
     planCounts: "{added} new · {replaced} replaced · {identical} identical · {skipped} skipped by patterns",
+    onlyHere: "{count} only on this machine",
+    onlyHereHint:
+      "These files exist in the target project but not in the received folder. They may have been deleted on the other machine and are candidates for removal after the merge. Nothing is deleted automatically.",
     receivedTitle: "Received",
     receivedInto: "{added} new and {replaced} replaced in {target}",
     logWritten: "Record written to {path}",

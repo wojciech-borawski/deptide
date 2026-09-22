@@ -11,16 +11,18 @@ pub enum StepName {
     Install,
     #[serde(rename = "force-install")]
     ForceInstall,
+    Version,
     Audit,
     Build,
 }
 
 impl StepName {
-    pub const fn all() -> [StepName; 5] {
+    pub const fn all() -> [StepName; 6] {
         [
             StepName::Uninstall,
             StepName::Install,
             StepName::ForceInstall,
+            StepName::Version,
             StepName::Audit,
             StepName::Build,
         ]
@@ -40,10 +42,41 @@ impl StepName {
             StepName::Uninstall => "uninstall",
             StepName::Install => "install",
             StepName::ForceInstall => "force install",
+            StepName::Version => "version",
             StepName::Audit => "audit",
             StepName::Build => "build",
         }
     }
+}
+
+/// Which part of the project's own version the `version` step raises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VersionBump {
+    #[default]
+    Patch,
+    Minor,
+    Major,
+}
+
+impl VersionBump {
+    pub fn label(self) -> &'static str {
+        match self {
+            VersionBump::Patch => "patch",
+            VersionBump::Minor => "minor",
+            VersionBump::Major => "major",
+        }
+    }
+}
+
+/// How the `version` step treats each project's `package.json` version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VersionPolicy {
+    pub bump: VersionBump,
+    /// Only bump when the version still equals the one on the main branch,
+    /// so a project that was already raised on this branch is left alone.
+    pub only_if_same_as_main: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -82,6 +115,7 @@ pub struct Job {
     pub audit_fix_args: Vec<String>,
     pub depends_on: Vec<String>,
     pub command: Option<String>,
+    pub version: VersionPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +160,8 @@ pub struct RunPlan {
     pub label: String,
     #[serde(default)]
     pub save_as: Option<String>,
+    #[serde(default)]
+    pub version: VersionPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +177,8 @@ pub struct SavedRun {
     pub mode: ExecutionMode,
     #[serde(default)]
     pub extra_install_args: Vec<String>,
+    #[serde(default)]
+    pub version: VersionPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

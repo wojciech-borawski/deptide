@@ -1,9 +1,56 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use regex::Regex;
 
+use crate::domain::PackageManifest;
+
 pub const DEFAULT_BRANCH_SUFFIX_PATTERN: &str = r"^([A-Za-z]+-\d+)";
+
+/// Branches tried, in order, when looking for "the main branch" of a project.
+const MAIN_BRANCH_CANDIDATES: &[&str] = &["main", "master", "origin/main", "origin/master"];
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn git_show(directory: &Path, spec: &str) -> Option<String> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(directory)
+        .arg("show")
+        .arg(spec)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command.output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// The `version` of the project's `package.json` as committed on the main
+/// branch, or `None` when git is unavailable, the folder is not a repository,
+/// no main-like branch exists or the manifest is not tracked there.
+pub fn version_on_main_branch(directory: &Path) -> Option<String> {
+    MAIN_BRANCH_CANDIDATES.iter().find_map(|branch| {
+        // `./package.json` is resolved by git relative to the working directory,
+        // so this also works for projects nested inside a larger repository.
+        let text = git_show(directory, &format!("{branch}:./package.json"))?;
+        serde_json::from_str::<PackageManifest>(&text)
+            .ok()
+            .and_then(|manifest| manifest.version)
+    })
+}
 
 fn git_directory(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);

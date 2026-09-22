@@ -66,6 +66,13 @@ const orderLabel = computed(() =>
         </dd>
         <dt>{{ t("review.installFlags") }}</dt>
         <dd class="mono">{{ plan.extraInstallArgs.join(" ") || "-" }}</dd>
+        <template v-if="plan.steps.includes('version')">
+          <dt>{{ t("review.versionBump") }}</dt>
+          <dd>
+            {{ t(`options.bump.${plan.version.bump}`) }}
+            <span v-if="plan.version.onlyIfSameAsMain" class="muted"> · {{ t("review.onlyIfSameAsMain") }}</span>
+          </dd>
+        </template>
         <dt>{{ t("review.mode") }}</dt>
         <dd>
           <span v-if="plan.dryRun" class="badge badge-warn">{{ t("common.dryRun") }}</span>

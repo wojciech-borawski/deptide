@@ -3,10 +3,14 @@ import { computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
+import ProjectKindChips from "@/components/projects/ProjectKindChips.vue";
 import ProjectPickerList from "@/components/projects/ProjectPickerList.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import ActionButton from "@/components/ui/ActionButton.vue";
 import NoticeBanner from "@/components/ui/NoticeBanner.vue";
+import SearchBox from "@/components/ui/SearchBox.vue";
+import { useProjectFilter } from "@/composables/useProjectFilter";
+import { useProjectSelection } from "@/composables/useProjectSelection";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { routeNames } from "@/router";
 import { useTransferStore } from "@/stores/transfer";
@@ -20,15 +24,13 @@ const router = useRouter();
 const { t } = useI18n();
 
 const projects = computed(() => workspace.projects.filter((project) => project.exists));
-
-const globalPatterns = computed(() => workspace.config?.transferIgnore ?? []);
-const allSelected = computed(
-  () => projects.value.length > 0 && projects.value.every((project) => transfer.copyProjects.includes(project.name)),
+const filter = useProjectFilter(projects);
+const selection = useProjectSelection(
+  { names: () => transfer.copyProjects, replace: transfer.setCopyProjects },
+  filter.visible,
 );
 
-function toggleAll(): void {
-  transfer.setCopyProjects(allSelected.value ? [] : projects.value.map((project) => project.name));
-}
+const globalPatterns = computed(() => workspace.config?.transferIgnore ?? []);
 
 function goToSettings(): void {
   void router.push({ name: routeNames.settings });
@@ -51,15 +53,29 @@ onMounted(() => {
       <section class="card stack">
         <div class="card-title">
           <h3>{{ t("transfer.projects") }}</h3>
-          <button class="btn btn-sm" type="button" :disabled="!projects.length" @click="toggleAll">
-            {{ allSelected ? t("projects.deselectAll") : t("projects.selectAll") }}
+          <span class="muted">{{
+            t("common.ofSelected", { selected: transfer.copyProjects.length, total: projects.length })
+          }}</span>
+        </div>
+        <div class="toolbar">
+          <SearchBox v-model="filter.text.value" :placeholder="t('projects.filter')" width="220px" />
+          <ProjectKindChips v-model="filter.kind.value" />
+          <span class="spacer" />
+          <button
+            class="btn btn-sm"
+            type="button"
+            :disabled="!selection.selectable.value.length"
+            @click="selection.toggleAllVisible"
+          >
+            {{ selection.allVisibleSelected.value ? t("projects.deselectAll") : t("projects.selectAll") }}
           </button>
         </div>
         <ProjectPickerList
           class="scroll"
-          :projects="projects"
+          :projects="filter.visible.value"
           :selected="transfer.copyProjects"
-          @toggle="transfer.toggleCopyProject"
+          :empty-text="t('projects.noMatch')"
+          @toggle="selection.toggle"
         />
       </section>
 
