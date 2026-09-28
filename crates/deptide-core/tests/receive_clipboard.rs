@@ -44,12 +44,12 @@ fn known() -> Vec<KnownProject> {
     vec![
         KnownProject {
             name: "storefront".to_string(),
-            directory: PathBuf::from("C:\\repos\\storefront"),
+            directory: PathBuf::from("/repos/storefront"),
             package_name: Some("@acme/storefront".to_string()),
         },
         KnownProject {
             name: "docs".to_string(),
-            directory: PathBuf::from("C:\\repos\\docs"),
+            directory: PathBuf::from("/repos/docs"),
             package_name: None,
         },
     ]
@@ -311,7 +311,7 @@ fn polls_of_an_unchanged_clipboard_read_nothing_from_it() {
 
     let renamed = vec![KnownProject {
         name: "shop".to_string(),
-        directory: PathBuf::from("C:\\repos\\shop"),
+        directory: PathBuf::from("/repos/shop"),
         package_name: Some("@acme/storefront".to_string()),
     }];
     let rematched = session.inspect(&clipboard, &renamed);

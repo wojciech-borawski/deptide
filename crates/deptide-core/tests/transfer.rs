@@ -375,12 +375,12 @@ fn a_virtual_folder_is_matched_by_its_name_or_package_name() {
     let known = vec![
         KnownProject {
             name: "storefront".to_string(),
-            directory: PathBuf::from("C:\\repos\\dash"),
+            directory: PathBuf::from("/repos/dash"),
             package_name: Some("@acme/storefront".to_string()),
         },
         KnownProject {
             name: "api".to_string(),
-            directory: PathBuf::from("C:\\repos\\orders-api"),
+            directory: PathBuf::from("/repos/orders-api"),
             package_name: Some("@acme/api".to_string()),
         },
     ];
