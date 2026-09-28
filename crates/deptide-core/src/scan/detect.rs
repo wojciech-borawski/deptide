@@ -140,6 +140,7 @@ fn to_detected_project(
         has_build_script: manifest.scripts.contains_key(BUILD_SCRIPT_NAME),
         dependencies: manifest.dependencies,
         dev_dependencies: manifest.dev_dependencies,
+        peer_dependencies: manifest.peer_dependencies,
     }
 }
 

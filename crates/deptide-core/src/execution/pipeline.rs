@@ -1,32 +1,144 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use super::backup::backup_project;
 use super::command::{describe_exit_code, npm_program, run_command, CommandOutcome, CommandSpec};
 use super::diagnose::diagnose;
+use super::manifest::write_entries;
 use super::state::{JobState, RunEvent};
 use super::steps::{
-    dry_run_lines, plan_audit_fix, plan_build, plan_install, plan_uninstall, plan_version_bump,
-    PlannedCommand,
+    describe_entries, dry_run_lines, plan_audit_fix, plan_build, plan_install, plan_uninstall,
+    plan_version_bump, save_exact_peer_note, InstallGroup, ManifestEntry, PlannedCommand,
 };
 use super::verify::{
     describe_installed, diff_dependencies, read_top_level_versions, verify_installed,
 };
 use super::RunContext;
-use crate::domain::{Job, JobStatus, StepName};
+use crate::domain::{BumpWhen, DependencySection, Job, JobStatus, PackageManifest, StepName};
+use crate::error::AppError;
 use crate::scan::{
-    read_package_manifest, read_project_at, version_on_main_branch, MANIFEST_FILE_NAME,
+    read_package_manifest, read_project_at, version_at_fork_point, version_on_main_branch,
+    ForkPointVersion, MANIFEST_FILE_NAME,
 };
 use crate::util::text::describe_count;
 
 const TRANSIENT_CODES: &[&str] = &["ENETWORK", "EINTEGRITY"];
 const MAX_ATTEMPTS: u32 = 2;
+const RESTORE_STEP: &str = "restore package.json";
+const SECTIONS: [DependencySection; 3] = [
+    DependencySection::Dependencies,
+    DependencySection::Dev,
+    DependencySection::Peer,
+];
 
 enum StepError {
     Aborted,
     Failure(String),
+}
+
+#[derive(Clone, Copy)]
+enum Restore {
+    PeerRanges,
+    Everything,
+}
+
+fn changes_packages(step: StepName) -> bool {
+    matches!(
+        step,
+        StepName::Uninstall | StepName::Install | StepName::ForceInstall
+    )
+}
+
+fn has_install_step(job: &Job) -> bool {
+    job.steps
+        .iter()
+        .any(|step| matches!(step, StepName::Install | StepName::ForceInstall))
+}
+
+fn is_last_package_step(job: &Job, step: StepName) -> bool {
+    job.steps
+        .iter()
+        .rev()
+        .find(|candidate| changes_packages(**candidate))
+        == Some(&step)
+}
+
+fn section_of(manifest: &PackageManifest, section: DependencySection) -> &BTreeMap<String, String> {
+    match section {
+        DependencySection::Dependencies => &manifest.dependencies,
+        DependencySection::Dev => &manifest.dev_dependencies,
+        DependencySection::Peer => &manifest.peer_dependencies,
+    }
+}
+
+fn declared_entries(job: &Job) -> Vec<ManifestEntry> {
+    let Some(manifest) = read_package_manifest(&job.directory) else {
+        return Vec::new();
+    };
+
+    job.packages
+        .iter()
+        .flat_map(|spec| {
+            SECTIONS.iter().filter_map(|section| {
+                section_of(&manifest, *section)
+                    .get(&spec.name)
+                    .map(|range| ManifestEntry {
+                        section: *section,
+                        name: spec.name.clone(),
+                        range: range.clone(),
+                    })
+            })
+        })
+        .collect()
+}
+
+fn installs_as_peer(job: &Job, name: &str) -> bool {
+    job.packages
+        .iter()
+        .any(|spec| spec.name == name && InstallGroup::of(spec) == InstallGroup::Peer)
+}
+
+fn entries_to_restore(
+    job: &Job,
+    saved: Vec<ManifestEntry>,
+    restore: Restore,
+) -> Vec<ManifestEntry> {
+    match restore {
+        Restore::Everything => saved,
+        Restore::PeerRanges => saved
+            .into_iter()
+            .filter(|entry| {
+                entry.section == DependencySection::Peer && !installs_as_peer(job, &entry.name)
+            })
+            .collect(),
+    }
+}
+
+fn differing_entries(directory: &Path, expected: &[ManifestEntry]) -> Vec<ManifestEntry> {
+    let manifest = read_package_manifest(directory);
+    expected
+        .iter()
+        .filter(|entry| {
+            let current = manifest
+                .as_ref()
+                .and_then(|manifest| section_of(manifest, entry.section).get(&entry.name));
+            current != Some(&entry.range)
+        })
+        .cloned()
+        .collect()
+}
+
+fn with_restore(
+    step: Result<(), StepError>,
+    restored: Result<(), StepError>,
+) -> Result<(), StepError> {
+    match (step, restored) {
+        (Err(StepError::Failure(message)), _) => Err(StepError::Failure(message)),
+        (_, Err(error)) => Err(error),
+        (step, Ok(())) => step,
+    }
 }
 
 pub struct JobRunner {
@@ -172,6 +284,9 @@ impl JobRunner {
     async fn step_install(&self, job: &Job, force: bool) -> Result<(), StepError> {
         let before = read_top_level_versions(&job.directory);
 
+        if let Some(note) = save_exact_peer_note(job) {
+            self.append_log(note);
+        }
         for command in plan_install(job, force) {
             let outcome = self.run_npm(command).await?;
             if outcome.code != Some(0) {
@@ -219,33 +334,84 @@ impl JobRunner {
         Ok(())
     }
 
+    /// Whether the `version` step runs npm; logs the reason whenever git decides it.
+    async fn bump_allowed(&self, job: &Job, before: Option<&str>) -> bool {
+        let current = before.unwrap_or("none");
+        let directory = job.directory.clone();
+
+        match job.version.when {
+            BumpWhen::Always => true,
+            BumpWhen::SameAsMain => {
+                let on_main =
+                    tokio::task::spawn_blocking(move || version_on_main_branch(&directory))
+                        .await
+                        .unwrap_or(None);
+
+                match on_main {
+                    Some(main) if before == Some(main.as_str()) => {
+                        self.append_log(format!("version {current} still equals main, bumping"));
+                        true
+                    }
+                    Some(main) => {
+                        self.append_log(format!(
+                            "version {current} already differs from main ({main}), bump skipped"
+                        ));
+                        false
+                    }
+                    None => {
+                        self.append_log(
+                            "could not read the version on the main branch, bump skipped"
+                                .to_string(),
+                        );
+                        false
+                    }
+                }
+            }
+            BumpWhen::NotBumpedOnBranch => {
+                let fork = tokio::task::spawn_blocking(move || version_at_fork_point(&directory))
+                    .await
+                    .unwrap_or_else(|_| {
+                        ForkPointVersion::Unavailable("the git lookup stopped".to_string())
+                    });
+
+                match fork {
+                    ForkPointVersion::Found {
+                        version,
+                        base_branch,
+                        commit,
+                    } if before == Some(version.as_str()) => {
+                        self.append_log(format!(
+                            "version {current} is unchanged since {base_branch} ({commit}), bumping"
+                        ));
+                        true
+                    }
+                    ForkPointVersion::Found {
+                        version,
+                        base_branch,
+                        commit,
+                    } => {
+                        self.append_log(format!(
+                            "version {current} already changed on this branch (was {version} at {base_branch} {commit}), bump skipped"
+                        ));
+                        false
+                    }
+                    ForkPointVersion::Unavailable(reason) => {
+                        self.append_log(format!(
+                            "cannot tell whether this branch bumped the version: {reason}, bump skipped"
+                        ));
+                        false
+                    }
+                }
+            }
+        }
+    }
+
     async fn step_version(&self, job: &Job) -> Result<(), StepError> {
         let before = read_package_manifest(&job.directory).and_then(|manifest| manifest.version);
         let current = before.as_deref().unwrap_or("none");
 
-        if job.version.only_if_same_as_main {
-            let directory = job.directory.clone();
-            let on_main = tokio::task::spawn_blocking(move || version_on_main_branch(&directory))
-                .await
-                .unwrap_or(None);
-
-            match on_main {
-                Some(main) if before.as_deref() == Some(main.as_str()) => {
-                    self.append_log(format!("version {current} still equals main, bumping"));
-                }
-                Some(main) => {
-                    self.append_log(format!(
-                        "version {current} already differs from main ({main}), bump skipped"
-                    ));
-                    return Ok(());
-                }
-                None => {
-                    self.append_log(
-                        "could not read the version on the main branch, bump skipped".to_string(),
-                    );
-                    return Ok(());
-                }
-            }
+        if !self.bump_allowed(job, before.as_deref()).await {
+            return Ok(());
         }
 
         let outcome = self.run_npm(plan_version_bump(job.version.bump)).await?;
@@ -325,6 +491,98 @@ impl JobRunner {
             Ok(None) => {}
             Err(error) => self.append_log(format!("backup skipped: {error}")),
         }
+    }
+
+    fn save_entries(&self, job: &Job) {
+        if self.with_state(|state| state.saved_entries.is_some()) {
+            return;
+        }
+
+        let entries = declared_entries(job);
+        self.with_state(|state| state.saved_entries = Some(entries));
+    }
+
+    async fn restore_entries(&self, job: &Job, restore: Restore) -> Result<(), StepError> {
+        let Some(saved) = self.with_state(|state| state.saved_entries.take()) else {
+            return Ok(());
+        };
+        let wanted = entries_to_restore(job, saved, restore);
+
+        if self.context.options.dry_run {
+            for entry in &wanted {
+                self.append_log(format!("would restore {}", entry.describe()));
+            }
+            return Ok(());
+        }
+
+        let changed = differing_entries(&job.directory, &wanted);
+        if changed.is_empty() {
+            return Ok(());
+        }
+
+        self.start_step(RESTORE_STEP);
+        let directory = job.directory.clone();
+        let entries = changed.clone();
+        let written = tokio::task::spawn_blocking(move || write_entries(&directory, &entries))
+            .await
+            .unwrap_or_else(|_| Err(AppError::new("the package.json write stopped")));
+        let still_different = differing_entries(&job.directory, &changed);
+        let problem = match written {
+            Err(error) => Some(error.to_string()),
+            Ok(()) if !still_different.is_empty() => {
+                Some("package.json still differs after writing it".to_string())
+            }
+            Ok(()) => None,
+        };
+
+        if let Some(reason) = problem {
+            let unrestored = if still_different.is_empty() {
+                &changed
+            } else {
+                &still_different
+            };
+            let message = format!(
+                "could not restore {}: {reason}",
+                describe_entries(unrestored)
+            );
+            self.append_log(message.clone());
+            return Err(StepError::Failure(message));
+        }
+
+        for entry in &changed {
+            self.append_log(format!("restored {}", entry.describe()));
+        }
+        Ok(())
+    }
+
+    async fn run_step_keeping_entries(&self, job: &Job, step: StepName) -> Result<(), StepError> {
+        if !changes_packages(step) || !has_install_step(job) {
+            return self.run_step_with_retry(job, step).await;
+        }
+
+        self.save_entries(job);
+        let result = self.run_step_with_retry(job, step).await;
+        let restore = match result {
+            Ok(()) if !is_last_package_step(job, step) => return result,
+            Ok(()) => Restore::PeerRanges,
+            Err(_) => Restore::Everything,
+        };
+
+        let restored = self.restore_entries(job, restore).await;
+        with_restore(result, restored)
+    }
+
+    /// Puts back every saved entry of a job whose package steps did not all run.
+    pub async fn restore_pending_entries(&self) {
+        if self.with_state(|state| state.saved_entries.is_none()) {
+            return;
+        }
+
+        let job = self.job();
+        if let Err(error) = self.restore_entries(&job, Restore::Everything).await {
+            self.apply_failure(error);
+        }
+        self.end();
     }
 
     pub fn mark_skipped_with_reason(&self, reason: String) {
@@ -457,11 +715,13 @@ impl JobRunner {
         if result.is_ok() {
             self.back_up_files(&job);
             for step in &job.steps {
-                result = self.run_step_with_retry(&job, *step).await;
+                result = self.run_step_keeping_entries(&job, *step).await;
                 if result.is_err() {
                     break;
                 }
             }
+            let restored = self.restore_entries(&job, Restore::Everything).await;
+            result = with_restore(result, restored);
         }
 
         self.finish_with(result, JobStatus::Ok);
@@ -487,7 +747,7 @@ impl JobRunner {
         let result = match Self::ensure_manifest(&job) {
             Ok(()) => {
                 self.back_up_files(&job);
-                self.run_step_with_retry(&job, step).await
+                self.run_step_keeping_entries(&job, step).await
             }
             Err(error) => Err(error),
         };

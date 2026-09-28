@@ -33,7 +33,7 @@ import { useRunStore } from "@/stores/run";
 
 const plan: RunPlan = {
   projectNames: ["web", "api"],
-  packages: [{ name: "left-pad", version: "1.3.0", saveDev: false }],
+  packages: [{ name: "left-pad", version: "1.3.0", saveDev: false, savePeer: false }],
   steps: ["install"],
   mode: "per-project",
   concurrency: 2,
@@ -41,7 +41,7 @@ const plan: RunPlan = {
   extraInstallArgs: [],
   label: "test",
   saveAs: null,
-  version: { bump: "patch", onlyIfSameAsMain: false },
+  version: { bump: "patch", when: "always" },
 };
 
 function emit(event: RunEvent): void {

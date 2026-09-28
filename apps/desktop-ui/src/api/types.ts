@@ -4,13 +4,17 @@ export type VersionBump = "patch" | "minor" | "major";
 
 export const allBumps: readonly VersionBump[] = ["patch", "minor", "major"];
 
+/** When the version step bumps a project's own version. */
+export type BumpWhen = "always" | "same-as-main" | "not-bumped-on-branch";
+
+export const allBumpWhens: readonly BumpWhen[] = ["always", "same-as-main", "not-bumped-on-branch"];
+
 export interface VersionPolicy {
   bump: VersionBump;
-  /// Only bump a project whose version still equals the one on the main branch.
-  onlyIfSameAsMain: boolean;
+  when: BumpWhen;
 }
 
-export const defaultVersionPolicy: VersionPolicy = { bump: "patch", onlyIfSameAsMain: false };
+export const defaultVersionPolicy: VersionPolicy = { bump: "patch", when: "always" };
 
 export type ExecutionMode = "per-project" | "per-step";
 
@@ -22,7 +26,13 @@ export interface PackageSpec {
   name: string;
   version: string;
   saveDev: boolean;
+  savePeer: boolean;
 }
+
+/** A package.json dependency field, listed in grouping precedence order. */
+export type DependencySection = "dependencies" | "peer" | "dev";
+
+export const allSections: readonly DependencySection[] = ["dependencies", "peer", "dev"];
 
 export interface DependencyCandidate {
   name: string;
@@ -32,6 +42,7 @@ export interface DependencyCandidate {
   currentRanges: string[];
   usedBy: string[];
   isDevDependency: boolean;
+  sections: DependencySection[];
 }
 
 export interface ConfiguredProject {
@@ -196,22 +207,44 @@ export interface ClipboardEntry {
   isProject: boolean;
   packageName: string | null;
   suggestedProject: string | null;
+  files: number | null;
+  bytes: number | null;
 }
+
+export type ClipboardSource = "paths" | "virtual" | "empty" | "busy" | "unreadable";
 
 export interface ClipboardContents {
+  source: ClipboardSource;
+  sequence: number | null;
   entries: ClipboardEntry[];
+  rejected: number;
+  problem: string | null;
 }
 
-export type FileStatus = "added" | "replaced" | "identical";
+export interface ExtractProgress {
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number | null;
+}
+
+export interface DownloadedFolder {
+  id: string;
+  path: string;
+}
+
+export interface ClipboardDownload {
+  sequence: number;
+  directory: string;
+  folders: DownloadedFolder[];
+}
+
+export type FileStatus = "added" | "replaced" | "whitespace" | "identical" | "removed";
 
 export interface ReceiveFile {
   relative: string;
   status: FileStatus;
-  size: number;
-}
-
-export interface TargetOnlyFile {
-  relative: string;
+  /** Size of the received file, or of the target file for `removed`. */
   size: number;
 }
 
@@ -223,9 +256,21 @@ export interface ReceiveProjectPlan {
   skipped: number;
   added: number;
   replaced: number;
+  whitespace: number;
   identical: number;
-  /// Present in the target project but not in the received folder. Never deleted by Deptide.
-  onlyInTarget: TargetOnlyFile[];
+  removed: number;
+}
+
+export type FileSide =
+  | { kind: "text"; text: string; bom: boolean; size: number }
+  | { kind: "binary"; size: number }
+  | { kind: "tooLarge"; size: number };
+
+export interface ReceiveFileContents {
+  /** The file in the received folder, `null` when it has no such file. */
+  received: FileSide | null;
+  /** The file in the target project, `null` when it has no such file. */
+  local: FileSide | null;
 }
 
 export interface ReceivePlan {
@@ -241,6 +286,8 @@ export interface ReceiveSelection {
   source: string;
   target: string;
   files: string[];
+  /** Target files to move to the Recycle Bin; each must be absent from `source`. */
+  delete: string[];
 }
 
 export interface ReceiveProjectResult {
@@ -248,8 +295,14 @@ export interface ReceiveProjectResult {
   targetDirectory: string;
   added: number;
   replaced: number;
+  deleted: number;
+  /** Overwritten plus deleted files moved to the Recycle Bin. */
+  recycled: number;
   bytes: number;
   files: string[];
+  deletedFiles: string[];
+  /** Entries of `files` or `delete` that failed validation and were left alone. */
+  skipped: string[];
 }
 
 export interface ReceiveResult {
@@ -286,6 +339,7 @@ export interface DetectedProject {
   kind: ProjectKind;
   dependencies: Record<string, string>;
   devDependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
   hasBuildScript: boolean;
 }
 

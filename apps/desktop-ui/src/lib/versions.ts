@@ -29,7 +29,7 @@ export function parseSpec(spec: string): PackageSpec | null {
   const version = trimmed.slice(separator + 1).trim();
   if (!name || !version) return null;
 
-  return { name, version, saveDev: false };
+  return { name, version, saveDev: false, savePeer: false };
 }
 
 export function formatSpec(spec: PackageSpec): string {

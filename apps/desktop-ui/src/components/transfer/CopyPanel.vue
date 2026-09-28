@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter } from "vue-router";
 
 import ProjectKindChips from "@/components/projects/ProjectKindChips.vue";
 import ProjectPickerList from "@/components/projects/ProjectPickerList.vue";
@@ -12,15 +11,14 @@ import SearchBox from "@/components/ui/SearchBox.vue";
 import { useProjectFilter } from "@/composables/useProjectFilter";
 import { useProjectSelection } from "@/composables/useProjectSelection";
 import { formatBytes, formatDateTime } from "@/lib/format";
-import { routeNames } from "@/router";
 import { useTransferStore } from "@/stores/transfer";
 import { useWizardStore } from "@/stores/wizard";
 import { useWorkspaceStore } from "@/stores/workspace";
+import IgnorePatternChips from "./IgnorePatternChips.vue";
 
 const workspace = useWorkspaceStore();
 const wizard = useWizardStore();
 const transfer = useTransferStore();
-const router = useRouter();
 const { t } = useI18n();
 
 const projects = computed(() => workspace.projects.filter((project) => project.exists));
@@ -31,10 +29,6 @@ const selection = useProjectSelection(
 );
 
 const globalPatterns = computed(() => workspace.config?.transferIgnore ?? []);
-
-function goToSettings(): void {
-  void router.push({ name: routeNames.settings });
-}
 
 onMounted(() => {
   if (!transfer.copyProjects.length && wizard.draft.projectNames.length) {
@@ -80,18 +74,12 @@ onMounted(() => {
       </section>
 
       <section class="card stack">
-        <div class="field">
-          <label>{{ t("transfer.ignoreGlobal") }}</label>
-          <div class="chips">
-            <span v-for="pattern in globalPatterns" :key="pattern" class="chip mono">{{ pattern }}</span>
-            <span v-if="!globalPatterns.length" class="faint">-</span>
-            <button class="chip" type="button" @click="goToSettings">
-              <AppIcon name="settings" :size="12" />
-              {{ t("nav.settings") }}
-            </button>
-          </div>
-          <span class="hint">{{ t("transfer.ignoreGlobalHint") }}</span>
-        </div>
+        <IgnorePatternChips
+          :patterns="globalPatterns"
+          :disabled="transfer.copyDisabled"
+          :busy="transfer.copyBusy"
+          @toggle="transfer.toggleCopyPattern"
+        />
         <div class="field">
           <label>{{ t("transfer.ignoreRun") }}</label>
           <textarea
@@ -182,12 +170,6 @@ onMounted(() => {
 .scroll {
   max-height: 320px;
   overflow: auto;
-}
-
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 .summary {

@@ -28,7 +28,7 @@ reopened automatically at start.
 {
   "installArgs": ["--no-fund"],
   "auditFixArgs": [],
-  "packages": [{ "name": "@acme/core", "version": "3.1.0-ABC-123", "saveDev": false }],
+  "packages": [{ "name": "@acme/core", "version": "3.1.0-ABC-123", "saveDev": false, "savePeer": false }],
   "projects": [
     { "name": "Shop-Frontend", "path": "../repos/shop/frontend" },
     {
@@ -46,6 +46,11 @@ reopened automatically at start.
 - `skip` unticks the project by default in the wizard.
 - `packages` restricts which libraries may be applied to that project.
 - `installArgs` on a project replaces the top-level `installArgs`.
+- `saveDev` and `savePeer` on a package are the install flags used when a
+  project's `package.json` cannot be read; otherwise the field the project
+  declares the package in decides. `saveDev` wins when both are set. A missing
+  `savePeer`, as in files written before it existed, reads as `false`; the same
+  holds for packages in saved runs.
 - Older shapes are accepted when reading: a package may be the string
   `name@version`, a project may be a bare path string.
 
@@ -72,7 +77,11 @@ the `package.json` copies kept there never show up as projects.
 
 A saved run records the selected project names, the exact package versions,
 steps, order, concurrency, extra install flags and the version-bump policy
-(`version: { bump, onlyIfSameAsMain }`, defaulting to a patch bump). Loading one in the History
+(`version: { bump, when }`, defaulting to a patch bump with `when: "always"`;
+`when` is `always`, `same-as-main` or `not-bumped-on-branch`). Runs saved
+before `when` existed store `onlyIfSameAsMain` instead and still load: `true`
+as `same-as-main`, `false` or missing as `always`. When both fields are
+present, `when` wins. Loading one in the History
 screen pre-fills the wizard and jumps to the review step, so anything can still
 be changed before starting.
 

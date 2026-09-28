@@ -42,7 +42,8 @@ const orderLabel = computed(() =>
         </div>
         <div class="chips">
           <span v-for="spec in plan.packages" :key="spec.name" class="chip mono active">
-            {{ formatSpec(spec) }}<span v-if="spec.saveDev" class="faint"> dev</span>
+            {{ formatSpec(spec) }}<span v-if="spec.saveDev" class="faint"> dev</span
+            ><span v-else-if="spec.savePeer" class="faint" :title="t('version.peerHint')"> peer</span>
           </span>
         </div>
         <p class="hint muted">{{ t("review.librariesHint") }}</p>
@@ -70,7 +71,9 @@ const orderLabel = computed(() =>
           <dt>{{ t("review.versionBump") }}</dt>
           <dd>
             {{ t(`options.bump.${plan.version.bump}`) }}
-            <span v-if="plan.version.onlyIfSameAsMain" class="muted"> · {{ t("review.onlyIfSameAsMain") }}</span>
+            <span v-if="plan.version.when !== 'always'" class="muted">
+              · {{ t(`review.bumpWhen.${plan.version.when}`) }}</span
+            >
           </dd>
         </template>
         <dt>{{ t("review.mode") }}</dt>

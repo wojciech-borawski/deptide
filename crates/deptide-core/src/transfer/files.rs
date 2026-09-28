@@ -1,5 +1,5 @@
 use std::fs;
-use std::io;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -8,7 +8,9 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AppResult;
 
-const GIT_DIRECTORY: &str = ".git";
+pub const GIT_DIRECTORY: &str = ".git";
+const WHITESPACE_COMPARE_LIMIT: u64 = 5 * 1024 * 1024;
+pub(super) const BINARY_SNIFF_BYTES: u64 = 8 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollectedFile {
@@ -47,11 +49,21 @@ fn extra_rules(root: &Path, patterns: &[String]) -> Option<Gitignore> {
 }
 
 pub fn collect_files(root: &Path, patterns: &[String], respect_gitignore: bool) -> Collection {
+    walk(root, patterns, respect_gitignore, true)
+}
+
+/// `collect_files` without the ignore files above `root`, which belong to the folder it was received into.
+pub fn collect_received_files(root: &Path, patterns: &[String]) -> Collection {
+    walk(root, patterns, true, false)
+}
+
+fn walk(root: &Path, patterns: &[String], respect_gitignore: bool, parents: bool) -> Collection {
     let rules = extra_rules(root, patterns);
     let mut collection = Collection::default();
 
     let walker = WalkBuilder::new(root)
         .hidden(false)
+        .parents(parents)
         .git_ignore(respect_gitignore)
         .git_global(respect_gitignore)
         .git_exclude(respect_gitignore)
@@ -128,6 +140,94 @@ fn digest(path: &Path) -> Option<Vec<u8>> {
     let mut hasher = Sha256::new();
     io::copy(&mut file, &mut hasher).ok()?;
     Some(hasher.finalize().to_vec())
+}
+
+/// Whether both files hold the same text once line endings (CRLF, LF, CR),
+/// trailing whitespace and blank lines are ignored. Indentation still counts.
+/// Always false for a file over 5 MiB or with a NUL byte in its first 8 KiB.
+pub fn same_ignoring_whitespace(a: &Path, b: &Path) -> bool {
+    is_comparable_text(a) && is_comparable_text(b) && same_text_lines(a, b).unwrap_or(false)
+}
+
+fn is_comparable_text(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() > WHITESPACE_COMPARE_LIMIT {
+        return false;
+    }
+
+    let mut head = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(BINARY_SNIFF_BYTES).read_to_end(&mut head))
+        .is_ok_and(|_| !head.contains(&0))
+}
+
+fn same_text_lines(a: &Path, b: &Path) -> io::Result<bool> {
+    let mut left = TextLines::open(a)?;
+    let mut right = TextLines::open(b)?;
+
+    loop {
+        let (left_line, right_line) = (left.next_non_blank()?, right.next_non_blank()?);
+        if left_line != right_line {
+            return Ok(false);
+        }
+        if left_line.is_none() {
+            return Ok(true);
+        }
+    }
+}
+
+struct TextLines {
+    reader: BufReader<fs::File>,
+    line: Vec<u8>,
+}
+
+impl TextLines {
+    fn open(path: &Path) -> io::Result<Self> {
+        Ok(Self {
+            reader: BufReader::new(fs::File::open(path)?),
+            line: Vec::new(),
+        })
+    }
+
+    /// The next line that is not blank, without its trailing whitespace.
+    fn next_non_blank(&mut self) -> io::Result<Option<&[u8]>> {
+        loop {
+            self.line.clear();
+            if !self.read_until_line_break()? {
+                return Ok(None);
+            }
+            let end = self
+                .line
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace())
+                .map_or(0, |last| last + 1);
+            if end > 0 {
+                return Ok(Some(&self.line[..end]));
+            }
+        }
+    }
+
+    fn read_until_line_break(&mut self) -> io::Result<bool> {
+        loop {
+            let available = self.reader.fill_buf()?;
+            if available.is_empty() {
+                return Ok(!self.line.is_empty());
+            }
+            if let Some(index) = available
+                .iter()
+                .position(|byte| matches!(byte, b'\r' | b'\n'))
+            {
+                self.line.extend_from_slice(&available[..index]);
+                self.reader.consume(index + 1);
+                return Ok(true);
+            }
+            let length = available.len();
+            self.line.extend_from_slice(available);
+            self.reader.consume(length);
+        }
+    }
 }
 
 pub fn to_posix(path: &Path) -> String {

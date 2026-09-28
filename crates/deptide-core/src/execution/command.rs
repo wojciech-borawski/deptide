@@ -210,7 +210,7 @@ pub async fn run_command<F>(
     spec: &CommandSpec,
     registry: &ProcessRegistry,
     job: usize,
-    mut on_line: F,
+    on_line: F,
 ) -> CommandOutcome
 where
     F: FnMut(String),
@@ -223,6 +223,17 @@ where
         };
     }
 
+    wait_for_command(spec, Some((registry, job)), on_line).await
+}
+
+async fn wait_for_command<F>(
+    spec: &CommandSpec,
+    owner: Option<(&ProcessRegistry, usize)>,
+    mut on_line: F,
+) -> CommandOutcome
+where
+    F: FnMut(String),
+{
     let mut child = match build_command(spec).spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -235,7 +246,7 @@ where
     };
 
     let pid = child.id();
-    if let Some(pid) = pid {
+    if let (Some(pid), Some((registry, job))) = (pid, owner) {
         registry.register(pid, job);
     }
 
@@ -253,7 +264,7 @@ where
     }
 
     let status = child.wait().await;
-    if let Some(pid) = pid {
+    if let (Some(pid), Some((registry, _))) = (pid, owner) {
         registry.unregister(pid);
     }
 
@@ -262,10 +273,11 @@ where
         .as_ref()
         .map(|status| status.code().is_none())
         .unwrap_or(false);
+    let job_aborted = owner.is_some_and(|(registry, job)| registry.is_job_aborted(job));
 
     CommandOutcome {
         code,
-        killed: registry.is_job_aborted(job) || ended_by_signal,
+        killed: job_aborted || ended_by_signal,
         spawn_error: None,
     }
 }

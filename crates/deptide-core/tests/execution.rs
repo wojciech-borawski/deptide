@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 
 use common::{manifest, TempDir};
 use deptide_core::domain::{
-    ConfiguredProject, ExecutionMode, JobStatus, PackageSpec, RunPlan, StepName, UpdateConfig,
-    VersionBump, VersionPolicy,
+    BumpWhen, ConfiguredProject, ExecutionMode, JobStatus, PackageSpec, RunPlan, StepName,
+    UpdateConfig, VersionBump, VersionPolicy,
 };
 use deptide_core::execution::{
-    build_jobs, execute_run, list_summaries, ProgressSink, RunContext, RunEvent, RunLogger,
-    RunOptions,
+    build_jobs, execute_run, list_summaries, plan_install, ProgressSink, RunContext, RunEvent,
+    RunLogger, RunOptions,
 };
 use deptide_core::workspace::{save_config, Workspace};
 
@@ -116,6 +116,28 @@ fn build_jobs_skips_projects_where_nothing_applies() {
 
     assert_eq!(outcome.without_packages, vec!["web"]);
     assert_eq!(outcome.jobs.len(), 1);
+}
+
+#[test]
+fn build_jobs_gives_every_job_the_version_policy_of_the_plan() {
+    let (_root, workspace) = workspace_with_projects();
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+    let mut plan = plan_for(
+        &["web", "api"],
+        vec![PackageSpec::new("@acme/core", "3.1.0")],
+        ExecutionMode::PerProject,
+    );
+    plan.version = VersionPolicy {
+        bump: VersionBump::Major,
+        when: BumpWhen::NotBumpedOnBranch,
+    };
+
+    let outcome = build_jobs(&workspace, &config, &plan);
+
+    assert_eq!(outcome.jobs.len(), 2);
+    for job in &outcome.jobs {
+        assert_eq!(job.version, plan.version, "{}", job.name);
+    }
 }
 
 async fn run(
@@ -390,7 +412,7 @@ async fn the_version_step_is_skipped_without_a_main_branch_to_compare_with() {
         command: None,
         version: VersionPolicy {
             bump: VersionBump::Minor,
-            only_if_same_as_main: true,
+            when: BumpWhen::SameAsMain,
         },
     };
 
@@ -430,5 +452,425 @@ async fn the_version_step_is_skipped_without_a_main_branch_to_compare_with() {
     assert!(
         logs.iter().any(|line| line.contains("bump skipped")),
         "expected a skip reason in {logs:?}"
+    );
+}
+
+fn workspace_with_sections() -> (TempDir, Workspace) {
+    let root = TempDir::new("sections");
+    let tool = root.mkdir("tool");
+    root.write(
+        "repos/deps/package.json",
+        r#"{"name":"deps","dependencies":{"left-pad":"^1.0.0"},"peerDependencies":{"left-pad":"^1.0.0"}}"#,
+    );
+    root.write(
+        "repos/dev/package.json",
+        r#"{"name":"dev","devDependencies":{"left-pad":"^1.0.0"}}"#,
+    );
+    root.write(
+        "repos/peer/package.json",
+        r#"{"name":"peer","peerDependencies":{"left-pad":"^1.0.0"}}"#,
+    );
+    root.write(
+        "repos/peer-dev/package.json",
+        r#"{"name":"peer-dev","peerDependencies":{"left-pad":"^1.0.0"},"devDependencies":{"left-pad":"^1.2.0"}}"#,
+    );
+
+    let workspace = Workspace::open(&tool).expect("workspace");
+    let config = UpdateConfig {
+        projects: ["deps", "dev", "peer", "peer-dev"]
+            .iter()
+            .map(|name| ConfiguredProject::new(*name, format!("../repos/{name}")))
+            .collect(),
+        ..UpdateConfig::default()
+    };
+    save_config(&workspace, &config).expect("config saved");
+
+    (root, workspace)
+}
+
+#[test]
+fn build_jobs_installs_each_package_from_the_section_the_project_declares_it_in() {
+    let (_root, workspace) = workspace_with_sections();
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+
+    let outcome = build_jobs(
+        &workspace,
+        &config,
+        &plan_for(
+            &["deps", "dev", "peer", "peer-dev"],
+            vec![PackageSpec::new("left-pad", "1.3.0")],
+            ExecutionMode::PerProject,
+        ),
+    );
+
+    assert!(
+        outcome.without_packages.is_empty(),
+        "a peer-only project declares the package: {:?}",
+        outcome.without_packages
+    );
+    let flags: Vec<(&str, bool, bool)> = outcome
+        .jobs
+        .iter()
+        .map(|job| {
+            let spec = &job.packages[0];
+            (job.name.as_str(), spec.save_dev, spec.save_peer)
+        })
+        .collect();
+
+    assert_eq!(
+        flags,
+        vec![
+            ("deps", false, false),
+            ("dev", true, false),
+            ("peer", false, true),
+            ("peer-dev", true, false),
+        ]
+    );
+}
+
+fn install_args_per_group(job: &deptide_core::domain::Job) -> Vec<Vec<String>> {
+    plan_install(job, false)
+        .into_iter()
+        .map(|command| command.args)
+        .collect()
+}
+
+#[test]
+fn build_jobs_installs_without_a_flag_when_the_package_is_also_in_dependencies() {
+    let root = TempDir::new("sections-with-dependencies");
+    let tool = root.mkdir("tool");
+    root.write(
+        "repos/deps-dev/package.json",
+        r#"{"name":"deps-dev","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"left-pad":"^1.2.0"}}"#,
+    );
+    root.write(
+        "repos/all/package.json",
+        r#"{"name":"all","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"left-pad":"^1.2.0"},"peerDependencies":{"left-pad":"^1.0.0"}}"#,
+    );
+    let workspace = Workspace::open(&tool).expect("workspace");
+    let config = UpdateConfig {
+        projects: vec![
+            ConfiguredProject::new("deps-dev", "../repos/deps-dev"),
+            ConfiguredProject::new("all", "../repos/all"),
+        ],
+        ..UpdateConfig::default()
+    };
+
+    let outcome = build_jobs(
+        &workspace,
+        &config,
+        &plan_for(
+            &["deps-dev", "all"],
+            vec![PackageSpec::new("left-pad", "1.3.0")],
+            ExecutionMode::PerProject,
+        ),
+    );
+
+    let names: Vec<&str> = outcome.jobs.iter().map(|job| job.name.as_str()).collect();
+    assert_eq!(names, vec!["deps-dev", "all"]);
+    for job in &outcome.jobs {
+        assert_eq!(
+            install_args_per_group(job),
+            vec![vec!["install", "left-pad@1.3.0", "--force"]],
+            "{}",
+            job.name
+        );
+    }
+}
+
+#[test]
+fn a_package_flagged_dev_and_peer_installs_as_dev_where_there_is_no_package_json() {
+    let root = TempDir::new("sections-no-manifest");
+    let tool = root.mkdir("tool");
+    root.mkdir("repos/bare");
+    let workspace = Workspace::open(&tool).expect("workspace");
+    let config = UpdateConfig {
+        projects: vec![ConfiguredProject::new("bare", "../repos/bare")],
+        ..UpdateConfig::default()
+    };
+    let package = PackageSpec {
+        save_dev: true,
+        save_peer: true,
+        ..PackageSpec::new("left-pad", "1.3.0")
+    };
+
+    let outcome = build_jobs(
+        &workspace,
+        &config,
+        &plan_for(&["bare"], vec![package], ExecutionMode::PerProject),
+    );
+
+    assert_eq!(outcome.jobs.len(), 1);
+    assert_eq!(
+        install_args_per_group(&outcome.jobs[0]),
+        vec![vec!["install", "left-pad@1.3.0", "--save-dev", "--force"]]
+    );
+}
+
+#[test]
+fn peer_installs_turn_save_exact_off_and_other_installs_keep_it() {
+    let root = TempDir::new("save-exact");
+    let exact_flags = ["--save-exact", "-E", "--save-exact=true"];
+    let job = deptide_core::domain::Job {
+        name: "lib".to_string(),
+        directory: root.join("repos/lib"),
+        packages: vec![
+            PackageSpec::new("left-pad", "1.3.0"),
+            PackageSpec {
+                save_dev: true,
+                ..PackageSpec::new("typescript", "5.0.0")
+            },
+            PackageSpec {
+                save_peer: true,
+                ..PackageSpec::new("@acme/core", "2.1.0")
+            },
+        ],
+        steps: vec![StepName::Install],
+        install_args: exact_flags
+            .iter()
+            .map(|flag| flag.to_string())
+            .chain(["--no-fund".to_string()])
+            .collect(),
+        audit_fix_args: vec![],
+        depends_on: vec![],
+        command: None,
+        version: VersionPolicy::default(),
+    };
+
+    let groups = install_args_per_group(&job);
+
+    assert_eq!(
+        groups,
+        vec![
+            vec![
+                "install",
+                "left-pad@1.3.0",
+                "--save-exact",
+                "-E",
+                "--save-exact=true",
+                "--no-fund"
+            ],
+            vec![
+                "install",
+                "typescript@5.0.0",
+                "--save-dev",
+                "--save-exact",
+                "-E",
+                "--save-exact=true",
+                "--no-fund"
+            ],
+            vec![
+                "install",
+                "@acme/core@2.1.0",
+                "--save-peer",
+                "--no-fund",
+                "--no-save-exact"
+            ],
+        ]
+    );
+}
+
+fn peer_job(root: &TempDir, steps: Vec<StepName>) -> deptide_core::domain::Job {
+    root.write(
+        "repos/lib/package.json",
+        r#"{"name":"lib","peerDependencies":{"left-pad":"^1.0.0","@acme/core":"^1 || ^2"},"devDependencies":{"left-pad":"^1.2.0"}}"#,
+    );
+
+    deptide_core::domain::Job {
+        name: "lib".to_string(),
+        directory: root.join("repos/lib"),
+        packages: vec![
+            PackageSpec {
+                save_dev: true,
+                ..PackageSpec::new("left-pad", "1.3.0")
+            },
+            PackageSpec {
+                save_peer: true,
+                ..PackageSpec::new("@acme/core", "2.1.0")
+            },
+        ],
+        steps,
+        install_args: vec!["--save-exact".to_string()],
+        audit_fix_args: vec![],
+        depends_on: vec![],
+        command: None,
+        version: VersionPolicy::default(),
+    }
+}
+
+async fn dry_run_log(jobs: Vec<deptide_core::domain::Job>, mode: ExecutionMode) -> Vec<String> {
+    let context = RunContext::new(
+        "run-peer".to_string(),
+        "peer".to_string(),
+        jobs,
+        RunOptions {
+            concurrency: 1,
+            mode,
+            dry_run: true,
+        },
+        Arc::new(RecordingSink::default()),
+        None,
+    );
+
+    execute_run(context.clone()).await;
+    context.snapshot(true).jobs.remove(0).log
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_shows_peer_installs_and_the_peer_ranges_it_would_restore() {
+    for mode in [ExecutionMode::PerProject, ExecutionMode::PerStep] {
+        let root = TempDir::new("peer-dry-run");
+        let job = peer_job(
+            &root,
+            vec![StepName::Uninstall, StepName::Install, StepName::Build],
+        );
+        let log = dry_run_log(vec![job], mode).await;
+
+        for expected in [
+            "would install left-pad@1.3.0 --save-dev",
+            "would install @acme/core@2.1.0 --save-peer",
+            "--save-exact dropped for peer installs: an exact peer range pins consumers to one version",
+            "would restore peerDependencies.left-pad = ^1.0.0",
+        ] {
+            assert!(
+                log.iter().any(|line| line == expected),
+                "{mode:?}: expected {expected:?} in {log:?}"
+            );
+        }
+        assert!(
+            !log.iter()
+                .any(|line| line.contains("peerDependencies.@acme/core")),
+            "{mode:?}: a package installed with --save-peer is not restored: {log:?}"
+        );
+
+        let restore = log
+            .iter()
+            .position(|line| line.starts_with("would restore"))
+            .unwrap();
+        let last_install = log
+            .iter()
+            .rposition(|line| line.starts_with("would install"))
+            .unwrap();
+        let build = log
+            .iter()
+            .position(|line| line == "would run npm run build")
+            .unwrap();
+        assert!(
+            last_install < restore && restore < build,
+            "{mode:?}: restore follows the last package step: {log:?}"
+        );
+        assert_eq!(
+            log.iter()
+                .filter(|line| line.starts_with("would restore"))
+                .count(),
+            1,
+            "{mode:?}: {log:?}"
+        );
+    }
+}
+
+const SAVE_EXACT_NOTE: &str =
+    "--save-exact dropped for peer installs: an exact peer range pins consumers to one version";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_notes_the_dropped_save_exact_for_each_spelling_of_the_flag() {
+    for flag in ["--save-exact", "-E", "--save-exact=true"] {
+        let root = TempDir::new("peer-note");
+        let mut job = peer_job(&root, vec![StepName::Install]);
+        job.install_args = vec![flag.to_string()];
+        let log = dry_run_log(vec![job], ExecutionMode::PerProject).await;
+
+        assert!(
+            log.iter().any(|line| line == SAVE_EXACT_NOTE),
+            "{flag}: {log:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_without_save_exact_has_no_note() {
+    let root = TempDir::new("peer-no-note");
+    let mut job = peer_job(&root, vec![StepName::Install]);
+    job.install_args = vec!["--no-fund".to_string()];
+    let log = dry_run_log(vec![job], ExecutionMode::PerProject).await;
+
+    assert!(!log.iter().any(|line| line == SAVE_EXACT_NOTE), "{log:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_without_package_steps_neither_snapshots_nor_restores_peer_ranges() {
+    let root = TempDir::new("peer-no-package-steps");
+    let job = peer_job(&root, vec![StepName::Build]);
+    let log = dry_run_log(vec![job], ExecutionMode::PerProject).await;
+
+    assert!(
+        !log.iter().any(|line| line.contains("peerDependencies")),
+        "{log:?}"
+    );
+}
+
+struct StopJobAtPhase {
+    context: Mutex<std::sync::Weak<RunContext>>,
+    job: String,
+    phase: StepName,
+}
+
+impl ProgressSink for StopJobAtPhase {
+    fn emit(&self, event: RunEvent) {
+        if let RunEvent::PhaseChanged {
+            phase: Some(phase), ..
+        } = event
+        {
+            if phase == self.phase {
+                if let Some(context) = self.context.lock().unwrap().upgrade() {
+                    context.abort_job(&self.job).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_per_step_dry_run_stopped_before_its_install_phase_lists_every_saved_entry() {
+    let root = TempDir::new("peer-per-step-stop");
+    let job = peer_job(&root, vec![StepName::Uninstall, StepName::Install]);
+    let sink = Arc::new(StopJobAtPhase {
+        context: Mutex::new(std::sync::Weak::new()),
+        job: "lib".to_string(),
+        phase: StepName::Install,
+    });
+    let context = RunContext::new(
+        "run-stop".to_string(),
+        "stop".to_string(),
+        vec![job],
+        RunOptions {
+            concurrency: 1,
+            mode: ExecutionMode::PerStep,
+            dry_run: true,
+        },
+        sink.clone(),
+        None,
+    );
+    *sink.context.lock().unwrap() = Arc::downgrade(&context);
+
+    execute_run(context.clone()).await;
+    let snapshot = context.snapshot(true);
+    let log = &snapshot.jobs[0].log;
+
+    assert_eq!(snapshot.jobs[0].status, JobStatus::Skipped);
+    let mut restores: Vec<&str> = log
+        .iter()
+        .filter(|line| line.starts_with("would restore"))
+        .map(String::as_str)
+        .collect();
+    restores.sort();
+    assert_eq!(
+        restores,
+        vec![
+            "would restore devDependencies.left-pad = ^1.2.0",
+            "would restore peerDependencies.@acme/core = ^1 || ^2",
+            "would restore peerDependencies.left-pad = ^1.0.0",
+        ],
+        "{log:?}"
     );
 }

@@ -16,6 +16,8 @@ enum RawPackage {
         version: Option<String>,
         #[serde(default, rename = "saveDev")]
         save_dev: bool,
+        #[serde(default, rename = "savePeer")]
+        save_peer: bool,
     },
 }
 
@@ -57,10 +59,12 @@ fn normalize_package(raw: RawPackage) -> Option<PackageSpec> {
             name,
             version,
             save_dev,
+            save_peer,
         } => Some(PackageSpec {
             name: name.filter(|value| !value.is_empty())?,
             version: version.filter(|value| !value.is_empty())?,
             save_dev,
+            save_peer,
         }),
     }
 }

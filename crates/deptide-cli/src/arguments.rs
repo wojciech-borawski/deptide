@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use deptide_core::domain::{ExecutionMode, StepName, VersionBump};
+use deptide_core::domain::{BumpWhen, ExecutionMode, StepName, VersionBump};
 
 #[derive(Parser)]
 #[command(
@@ -86,7 +86,15 @@ pub struct RunArgs {
     pub bump: BumpArg,
     #[arg(
         long,
-        help = "Let the version step bump only projects whose version still equals the one on the main branch"
+        value_enum,
+        value_name = "WHEN",
+        conflicts_with = "bump_only_if_same_as_main",
+        help = "When the version step bumps a project: always (the default), same-as-main (only while its version equals the one on the main branch) or not-bumped-on-branch (only while this branch's own commits have not changed it)"
+    )]
+    pub bump_when: Option<BumpWhenArg>,
+    #[arg(
+        long,
+        help = "Same as --bump-when same-as-main, kept for older scripts; cannot be combined with --bump-when"
     )]
     pub bump_only_if_same_as_main: bool,
     #[arg(long, help = "Label for the transcript and the history entry")]
@@ -187,6 +195,35 @@ impl From<BumpArg> for VersionBump {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+pub enum BumpWhenArg {
+    Always,
+    #[value(name = "same-as-main")]
+    SameAsMain,
+    #[value(name = "not-bumped-on-branch")]
+    NotBumpedOnBranch,
+}
+
+impl From<BumpWhenArg> for BumpWhen {
+    fn from(when: BumpWhenArg) -> Self {
+        match when {
+            BumpWhenArg::Always => BumpWhen::Always,
+            BumpWhenArg::SameAsMain => BumpWhen::SameAsMain,
+            BumpWhenArg::NotBumpedOnBranch => BumpWhen::NotBumpedOnBranch,
+        }
+    }
+}
+
+impl RunArgs {
+    pub fn bump_when(&self) -> BumpWhen {
+        match self.bump_when {
+            Some(when) => when.into(),
+            None if self.bump_only_if_same_as_main => BumpWhen::SameAsMain,
+            None => BumpWhen::Always,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 pub enum ModeArg {
     #[value(name = "per-project")]
     PerProject,
@@ -200,5 +237,56 @@ impl From<ModeArg> for ExecutionMode {
             ModeArg::PerProject => ExecutionMode::PerProject,
             ModeArg::PerStep => ExecutionMode::PerStep,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::error::ErrorKind;
+    use clap::Parser;
+    use deptide_core::domain::BumpWhen;
+
+    use super::{Cli, Command};
+
+    fn bump_when(flags: &[&str]) -> Result<BumpWhen, clap::Error> {
+        let mut args = vec!["deptide-cli", "run", "workspace", "-p", "left-pad@1.3.0"];
+        args.extend_from_slice(flags);
+        match Cli::try_parse_from(args)?.command {
+            Command::Run(run) => Ok(run.bump_when()),
+            _ => panic!("expected the run command"),
+        }
+    }
+
+    #[test]
+    fn bump_when_defaults_to_always_and_accepts_every_condition() {
+        assert_eq!(bump_when(&[]).unwrap(), BumpWhen::Always);
+        assert_eq!(
+            bump_when(&["--bump-when", "always"]).unwrap(),
+            BumpWhen::Always
+        );
+        assert_eq!(
+            bump_when(&["--bump-when", "same-as-main"]).unwrap(),
+            BumpWhen::SameAsMain
+        );
+        assert_eq!(
+            bump_when(&["--bump-when", "not-bumped-on-branch"]).unwrap(),
+            BumpWhen::NotBumpedOnBranch
+        );
+    }
+
+    #[test]
+    fn the_old_flag_means_same_as_main_and_cannot_be_combined_with_bump_when() {
+        assert_eq!(
+            bump_when(&["--bump-only-if-same-as-main"]).unwrap(),
+            BumpWhen::SameAsMain
+        );
+
+        let error = bump_when(&[
+            "--bump-when",
+            "not-bumped-on-branch",
+            "--bump-only-if-same-as-main",
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 }

@@ -13,12 +13,22 @@ export type Density = "comfortable" | "compact";
 
 export type PathDisplay = "absolute" | "relative";
 
+export type ReceiveLayout = "list" | "tree";
+
+export type ReceiveSort = "path" | "change";
+
+export type DiffMode = "unified" | "split";
+
 interface StoredPreferences {
   theme: Theme;
   density: Density;
   locale: Locale;
   updateUrl: string;
   pathDisplay: PathDisplay;
+  receiveLayout: ReceiveLayout;
+  receiveOnlyAffected: boolean;
+  receiveSort: ReceiveSort;
+  diffMode: DiffMode;
 }
 
 const storageKey = "deptide:preferences";
@@ -28,6 +38,12 @@ const themes: readonly Theme[] = ["system", "dark", "light"];
 const densities: readonly Density[] = ["comfortable", "compact"];
 
 const pathDisplays: readonly PathDisplay[] = ["absolute", "relative"];
+
+const receiveLayouts: readonly ReceiveLayout[] = ["list", "tree"];
+
+const receiveSorts: readonly ReceiveSort[] = ["path", "change"];
+
+const diffModes: readonly DiffMode[] = ["unified", "split"];
 
 function oneOf<T extends string>(allowed: readonly T[], value: unknown, fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback;
@@ -40,6 +56,10 @@ function parsePreferences(raw: string): StoredPreferences {
     locale: detectLocale(),
     updateUrl: "",
     pathDisplay: "absolute",
+    receiveLayout: "list",
+    receiveOnlyAffected: true,
+    receiveSort: "path",
+    diffMode: "unified",
   };
 
   try {
@@ -50,6 +70,11 @@ function parsePreferences(raw: string): StoredPreferences {
       locale: typeof parsed.locale === "string" && isLocale(parsed.locale) ? parsed.locale : defaults.locale,
       updateUrl: typeof parsed.updateUrl === "string" ? parsed.updateUrl : defaults.updateUrl,
       pathDisplay: oneOf(pathDisplays, parsed.pathDisplay, defaults.pathDisplay),
+      receiveLayout: oneOf(receiveLayouts, parsed.receiveLayout, defaults.receiveLayout),
+      receiveOnlyAffected:
+        typeof parsed.receiveOnlyAffected === "boolean" ? parsed.receiveOnlyAffected : defaults.receiveOnlyAffected,
+      receiveSort: oneOf(receiveSorts, parsed.receiveSort, defaults.receiveSort),
+      diffMode: oneOf(diffModes, parsed.diffMode, defaults.diffMode),
     };
   } catch {
     return defaults;
@@ -84,6 +109,22 @@ export const useUiStore = defineStore("ui", () => {
   const pathDisplay = computed({
     get: () => preferences.value.pathDisplay,
     set: (value) => (preferences.value.pathDisplay = value),
+  });
+  const receiveLayout = computed({
+    get: () => preferences.value.receiveLayout,
+    set: (value) => (preferences.value.receiveLayout = value),
+  });
+  const receiveOnlyAffected = computed({
+    get: () => preferences.value.receiveOnlyAffected,
+    set: (value) => (preferences.value.receiveOnlyAffected = value),
+  });
+  const receiveSort = computed({
+    get: () => preferences.value.receiveSort,
+    set: (value) => (preferences.value.receiveSort = value),
+  });
+  const diffMode = computed({
+    get: () => preferences.value.diffMode,
+    set: (value) => (preferences.value.diffMode = value),
   });
 
   const update = ref<UpdateInfo | null>(null);
@@ -130,6 +171,10 @@ export const useUiStore = defineStore("ui", () => {
     locale,
     updateUrl,
     pathDisplay,
+    receiveLayout,
+    receiveOnlyAffected,
+    receiveSort,
+    diffMode,
     update,
     info,
     updateError,

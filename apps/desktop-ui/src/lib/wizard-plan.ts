@@ -1,4 +1,13 @@
-import type { DependencyCandidate, ExecutionMode, PackageSpec, RunPlan, StepName, VersionBump } from "@/api/types";
+import type {
+  BumpWhen,
+  DependencyCandidate,
+  DependencySection,
+  ExecutionMode,
+  PackageSpec,
+  RunPlan,
+  StepName,
+  VersionBump,
+} from "@/api/types";
 import { allSteps } from "@/api/types";
 import { applySuffix, isValidSuffix, stripPrerelease } from "./versions";
 
@@ -14,6 +23,7 @@ export interface PackageChoice {
   currentRanges: string[];
   usedBy: string[];
   saveDev: boolean;
+  sections: DependencySection[];
   keepRange: string;
   suffix: string;
   manualVersion: string;
@@ -34,7 +44,7 @@ export interface WizardDraft {
   dryRun: boolean;
   extraInstallArgs: string;
   versionBump: VersionBump;
-  bumpOnlyIfSameAsMain: boolean;
+  bumpWhen: BumpWhen;
   label: string;
   saveRun: boolean;
   saveName: string;
@@ -60,6 +70,7 @@ export function createChoice(candidate: DependencyCandidate): PackageChoice {
     currentRanges: candidate.currentRanges,
     usedBy: candidate.usedBy,
     saveDev: candidate.isDevDependency,
+    sections: [...candidate.sections],
     keepRange: firstRange,
     suffix: "",
     manualVersion: firstRange || candidate.localVersion || "",
@@ -101,6 +112,10 @@ export function choiceProblem(choice: PackageChoice): string | null {
   return null;
 }
 
+export function isPeerOnly(sections: readonly DependencySection[]): boolean {
+  return sections.length > 0 && sections.every((section) => section === "peer");
+}
+
 export function selectedPackages(draft: WizardDraft): PackageSpec[] {
   const byName = new Map<string, PackageSpec>();
 
@@ -110,6 +125,7 @@ export function selectedPackages(draft: WizardDraft): PackageSpec[] {
       name: choice.name,
       version: resolveVersion(choice),
       saveDev: choice.saveDev,
+      savePeer: isPeerOnly(choice.sections),
     });
   }
 
@@ -145,7 +161,7 @@ export function buildRunPlan(draft: WizardDraft): RunPlan {
     extraInstallArgs: parseArguments(draft.extraInstallArgs),
     label,
     saveAs: draft.saveRun ? saveName : null,
-    version: { bump: draft.versionBump, onlyIfSameAsMain: draft.bumpOnlyIfSameAsMain },
+    version: { bump: draft.versionBump, when: draft.bumpWhen },
   };
 }
 

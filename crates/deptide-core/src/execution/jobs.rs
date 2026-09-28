@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::domain::{
-    ConfiguredProject, Job, PackageSpec, RunPlan, StepName, UpdateConfig, VersionPolicy,
+    ConfiguredProject, DependencySection, Job, PackageSpec, RunPlan, StepName, UpdateConfig,
+    VersionPolicy,
 };
 use crate::scan::read_package_manifest;
 use crate::workspace::Workspace;
@@ -21,15 +22,24 @@ struct ProjectManifest {
     package_name: Option<String>,
     dependencies: BTreeMap<String, String>,
     dev_dependencies: BTreeMap<String, String>,
+    peer_dependencies: BTreeMap<String, String>,
 }
 
 impl ProjectManifest {
     fn declares(&self, name: &str) -> bool {
-        self.dependencies.contains_key(name) || self.dev_dependencies.contains_key(name)
+        self.install_section(name).is_some()
     }
 
-    fn is_dev(&self, name: &str) -> bool {
-        self.dev_dependencies.contains_key(name) && !self.dependencies.contains_key(name)
+    fn install_section(&self, name: &str) -> Option<DependencySection> {
+        if self.dependencies.contains_key(name) {
+            Some(DependencySection::Dependencies)
+        } else if self.dev_dependencies.contains_key(name) {
+            Some(DependencySection::Dev)
+        } else if self.peer_dependencies.contains_key(name) {
+            Some(DependencySection::Peer)
+        } else {
+            None
+        }
     }
 }
 
@@ -39,6 +49,7 @@ fn read_manifest(workspace: &Workspace, project: &ConfiguredProject) -> Option<P
         package_name: manifest.name,
         dependencies: manifest.dependencies,
         dev_dependencies: manifest.dev_dependencies,
+        peer_dependencies: manifest.peer_dependencies,
     })
 }
 
@@ -64,12 +75,21 @@ fn packages_for_project(
             Some(manifest) => manifest.declares(&spec.name) || !declared_somewhere[*index],
             None => true,
         })
-        .map(|(_, spec)| PackageSpec {
-            name: spec.name.clone(),
-            version: spec.version.clone(),
-            save_dev: manifest
-                .map(|manifest| manifest.is_dev(&spec.name))
-                .unwrap_or(spec.save_dev),
+        .map(|(_, spec)| {
+            let (save_dev, save_peer) = match manifest {
+                Some(manifest) => match manifest.install_section(&spec.name) {
+                    Some(DependencySection::Dev) => (true, false),
+                    Some(DependencySection::Peer) => (false, true),
+                    Some(DependencySection::Dependencies) | None => (false, false),
+                },
+                None => (spec.save_dev, spec.save_peer),
+            };
+            PackageSpec {
+                name: spec.name.clone(),
+                version: spec.version.clone(),
+                save_dev,
+                save_peer,
+            }
         })
         .collect()
 }

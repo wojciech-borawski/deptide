@@ -1,11 +1,14 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 import type {
   AppInfo,
   ClipboardContents,
+  ClipboardDownload,
   CopyResult,
   DetectedProject,
+  ExtractProgress,
   ProjectInspection,
+  ReceiveFileContents,
   ReceivePlan,
   ReceiveRequest,
   ReceiveResult,
@@ -136,30 +139,53 @@ export function previewTransfer(
   root: string,
   projectNames: string[],
   extraPatterns: string[],
+  disabledPatterns: string[],
 ): Promise<TransferPreview> {
-  return call("preview_transfer", { root, projectNames, extraPatterns });
+  return call("preview_transfer", { root, projectNames, extraPatterns, disabledPatterns });
 }
 
 export function copyProjectsToClipboard(
   root: string,
   projectNames: string[],
   extraPatterns: string[],
+  disabledPatterns: string[],
 ): Promise<CopyResult> {
-  return call("copy_projects_to_clipboard", { root, projectNames, extraPatterns });
+  return call("copy_projects_to_clipboard", { root, projectNames, extraPatterns, disabledPatterns });
 }
 
 export function inspectClipboard(root: string): Promise<ClipboardContents> {
   return call("inspect_clipboard", { root });
 }
 
+export function downloadClipboard(
+  sequence: number,
+  onProgress: (progress: ExtractProgress) => void,
+): Promise<ClipboardDownload> {
+  return call("download_clipboard", { sequence, onProgress: new Channel<ExtractProgress>(onProgress) });
+}
+
+export function cancelClipboardDownload(): Promise<void> {
+  return call("cancel_clipboard_download");
+}
+
 export function analyzeReceive(
   root: string,
   requests: ReceiveRequest[],
   extraPatterns: string[],
+  disabledPatterns: string[],
 ): Promise<ReceivePlan> {
-  return call("analyze_receive", { root, requests, extraPatterns });
+  return call("analyze_receive", { root, requests, extraPatterns, disabledPatterns });
 }
 
 export function applyReceive(root: string, selections: ReceiveSelection[]): Promise<ReceiveResult> {
   return call("apply_receive", { root, selections });
+}
+
+export function readReceiveFile(
+  root: string,
+  source: string,
+  target: string,
+  relative: string,
+): Promise<ReceiveFileContents> {
+  return call("read_receive_file", { root, source, target, relative });
 }

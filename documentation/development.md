@@ -41,10 +41,22 @@ that answers every command with in-memory data and simulates a run with
 timed log lines. Nothing from that file is part of the production bundle;
 the dynamic import is dead code when the variable is unset.
 
+The mock clipboard holds a file list. Add `?clipboard=virtual` before the `#`
+of the address (http://localhost:1420/?clipboard=virtual) for two folders from
+a remote desktop that download in about two seconds, or
+`?clipboard=virtual-fail` for a download that fails with "The clipboard
+changed, analyze again" partway through.
+
 ## Tests
 
 - `apps/desktop-ui/tests/` holds Vitest tests for the pure TypeScript modules in `src/lib`
   (version arithmetic, plan building, validation, formatting).
+- Vitest runs in `tests/helpers/client-environment.ts`: plain Node with no
+  DOM, but `.vue` files are compiled the way the app compiles them rather than
+  for server rendering. That lets `tests/helpers/test-renderer.ts` mount a
+  component into an in-memory node tree with Vue's `createRenderer` and fire
+  its handlers (`click`, `dispatch`); `renderToString` from
+  `vue/server-renderer` still works for tests that only read the markup.
 - `crates/deptide-core/tests/` holds Cargo integration tests. They create temporary
   folders with fake `package.json` files and exercise the real modules:
   path normalisation, scanning, the scan merge, config parsing, saved runs,
@@ -52,9 +64,19 @@ the dynamic import is dead code when the variable is unset.
   event sink, in both execution orders and with an abort.
 
 - `crates/deptide-core/tests/npm_real.rs` spawns the real npm against a temporary
-  project (uninstall, install, and an abort while npm runs). Those two tests
-  need network access and are marked `#[ignore]`; run them on demand with
-  `cargo test -p deptide-core --test npm_real -- --ignored`.
+  project. The tests that restore `package.json` after a failed or stopped
+  install write an `.npmrc` with `offline=true` and an unreachable registry
+  into the project, so the uninstall works, every install fails and nothing
+  reaches the network; they run with the rest of the suite, as does a test
+  that stops a long-running `node` command and expects it killed. The tests that
+  install a real version need network access and are marked `#[ignore]`; run
+  them on demand with `cargo test -p deptide-core --test npm_real -- --ignored`.
+
+- `crates/deptide-core/tests/clipboard_real.rs` and `clipboard_virtual.rs` use
+  the real system clipboard and are marked `#[ignore]`. `clipboard_virtual.rs`
+  puts a fake file source on it, the way a remote desktop client does. Run
+  them on Windows with
+  `cargo test -p deptide-core --test clipboard_real --test clipboard_virtual -- --ignored --test-threads=1`.
 
 Keep new tests in those folders. Source files carry no comments by design;
 explanations belong in this folder.
@@ -140,7 +162,7 @@ screen.
 ```bash
 deptide-cli scan C:\example\workspace --apply
 deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 -P web -P api --steps install,build
-deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 --steps install,version,build --bump minor --bump-only-if-same-as-main
+deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 --steps install,version,build --bump minor --bump-when not-bumped-on-branch
 deptide-cli exec C:\example\workspace --concurrency 4 -- git status
 deptide-cli history C:\example\workspace
 ```

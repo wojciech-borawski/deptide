@@ -34,6 +34,19 @@
   --pending: #6b7280;
   --pending-soft: rgba(107, 114, 128, 0.14);
 
+  --diff-add-bg: rgba(46, 160, 67, 0.15);
+  --diff-del-bg: rgba(248, 81, 73, 0.15);
+  --diff-add-word: rgba(46, 160, 67, 0.4);
+  --diff-del-word: rgba(248, 81, 73, 0.4);
+
+  --syntax-keyword: #ff7b72;
+  --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff;
+  --syntax-comment: #8b949e;
+  --syntax-title: #d2a8ff;
+  --syntax-attr: #ffa657;
+  --syntax-tag: #7ee787;
+
   --radius-sm: 6px;
   --radius: 10px;
   --radius-lg: 14px;

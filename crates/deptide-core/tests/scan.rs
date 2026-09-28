@@ -209,3 +209,107 @@ fn the_workspace_own_folders_are_never_detected_as_projects() {
     let names: Vec<&str> = found.iter().map(|p| p.relative_path.as_str()).collect();
     assert_eq!(names, vec!["apps/web"]);
 }
+
+fn consumers_with_sections() -> Vec<deptide_core::domain::DetectedProject> {
+    let root = TempDir::new("scan-sections");
+    root.write(
+        "web/package.json",
+        r#"{"name":"web","version":"1.0.0",
+            "dependencies":{"shared":"^1.0.0"},
+            "devDependencies":{"tooling":"^2.1.0","dev-only":"^1.0.0"},
+            "peerDependencies":{"tooling":"^2.0.0","peer-only":"^1.0.0"}}"#,
+    );
+    root.write(
+        "api/package.json",
+        r#"{"name":"api","version":"1.0.0",
+            "devDependencies":{"shared":"^1.1.0","dev-only":"^1.2.0","mixed":"^3.0.0"},
+            "peerDependencies":{"shared":"^1.0.0"},
+            "dependencies":{"mixed":"^3.0.0"}}"#,
+    );
+
+    detect_projects(root.path(), &options(2))
+}
+
+fn candidate<'a>(
+    candidates: &'a [deptide_core::domain::DependencyCandidate],
+    name: &str,
+) -> &'a deptide_core::domain::DependencyCandidate {
+    candidates
+        .iter()
+        .find(|candidate| candidate.name == name)
+        .unwrap_or_else(|| panic!("{name} is a candidate"))
+}
+
+#[test]
+fn candidates_list_every_section_once_in_precedence_order() {
+    use deptide_core::domain::DependencySection::{Dependencies, Dev, Peer};
+
+    let consumers = consumers_with_sections();
+    let candidates = collect_dependency_candidates(&consumers, &consumers, "");
+
+    assert_eq!(
+        candidate(&candidates, "shared").sections,
+        vec![Dependencies, Peer, Dev]
+    );
+    assert_eq!(candidate(&candidates, "tooling").sections, vec![Peer, Dev]);
+    assert_eq!(candidate(&candidates, "dev-only").sections, vec![Dev]);
+    assert_eq!(
+        candidate(&candidates, "mixed").sections,
+        vec![Dependencies, Dev]
+    );
+}
+
+#[test]
+fn a_peer_only_package_is_a_candidate_with_its_range_and_consumer() {
+    use deptide_core::domain::DependencySection::Peer;
+
+    let consumers = consumers_with_sections();
+    let candidates = collect_dependency_candidates(&consumers, &consumers, "");
+    let peer_only = candidate(&candidates, "peer-only");
+
+    assert_eq!(peer_only.sections, vec![Peer]);
+    assert_eq!(peer_only.current_ranges, vec!["1.0.0"]);
+    assert_eq!(peer_only.used_by.len(), 1);
+    assert!(!peer_only.is_dev_dependency);
+}
+
+#[test]
+fn candidates_without_local_libraries_are_ordered_by_name() {
+    let consumers = consumers_with_sections();
+    let candidates = collect_dependency_candidates(&consumers, &consumers, "");
+
+    let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(
+        names, sorted,
+        "without local libraries the order is by name"
+    );
+}
+
+#[test]
+fn a_candidate_is_dev_only_when_every_consumer_has_it_as_dev_and_not_as_dependency() {
+    let consumers = consumers_with_sections();
+    let candidates = collect_dependency_candidates(&consumers, &consumers, "");
+
+    assert!(candidate(&candidates, "dev-only").is_dev_dependency);
+    assert!(
+        candidate(&candidates, "tooling").is_dev_dependency,
+        "a peer that is also a dev dependency installs with --save-dev"
+    );
+    assert!(!candidate(&candidates, "mixed").is_dev_dependency);
+    assert!(!candidate(&candidates, "shared").is_dev_dependency);
+}
+
+#[test]
+fn a_detected_project_saved_without_peer_dependencies_still_loads() {
+    let project: deptide_core::domain::DetectedProject = serde_json::from_str(
+        r#"{"directory":"C:/repos/web","relativePath":"web","proposedName":"web",
+            "packageName":"web","version":"1.0.0","dependencies":{"vue":"^3.5.0"},
+            "devDependencies":{},"hasBuildScript":true}"#,
+    )
+    .expect("old shape deserializes");
+
+    assert!(project.peer_dependencies.is_empty());
+    assert_eq!(project.dependencies.len(), 1);
+}

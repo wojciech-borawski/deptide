@@ -2,7 +2,14 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { baseVersion, choiceProblem, resolveVersion, type PackageChoice, type VersionMode } from "@/lib/wizard-plan";
+import {
+  baseVersion,
+  choiceProblem,
+  isPeerOnly,
+  resolveVersion,
+  type PackageChoice,
+  type VersionMode,
+} from "@/lib/wizard-plan";
 
 const props = defineProps<{ choice: PackageChoice }>();
 const emit = defineEmits<{ patch: [patch: Partial<PackageChoice>] }>();
@@ -88,6 +95,9 @@ function setMode(mode: VersionMode, keepRange?: string): void {
       <span v-if="problem" class="badge badge-warn">{{ t(problem) }}</span>
       <span v-else class="badge badge-accent mono">{{ props.choice.name }}@{{ resolved }}</span>
       <span v-if="props.choice.saveDev" class="badge">--save-dev</span>
+      <span v-else-if="isPeerOnly(props.choice.sections)" class="badge" :title="t('version.peerHint')"
+        >--save-peer</span
+      >
     </div>
   </div>
 </template>

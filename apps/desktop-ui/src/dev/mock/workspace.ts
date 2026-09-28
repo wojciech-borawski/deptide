@@ -24,7 +24,7 @@ export const workspaceState: { settings: Settings; config: UpdateConfig; history
   },
   config: {
     installArgs: ["--no-fund"],
-    packages: [{ name: "@demo/core", version: "2.2.0", saveDev: false }],
+    packages: [{ name: "@demo/core", version: "2.2.0", saveDev: false, savePeer: false }],
     projects: [
       { name: "Shop-Frontend", path: "../repos/shop/frontend" },
       { name: "Shop-Admin", path: "../repos/shop/admin" },
@@ -32,6 +32,7 @@ export const workspaceState: { settings: Settings; config: UpdateConfig; history
       { name: "Billing-Api", path: "../repos/services/billing-api" },
       { name: "Legacy-Portal", path: "../repos/legacy/portal" },
     ],
+    transferIgnore: ["*.log", "coverage/", ".env.local"],
   },
   history: [],
 };
@@ -81,6 +82,7 @@ export function dependencyCandidates(): DependencyCandidate[] {
       currentRanges: ["2.2.0"],
       usedBy: consumers,
       isDevDependency: false,
+      sections: ["dependencies"],
     },
     {
       name: "@demo/ui-kit",
@@ -90,6 +92,7 @@ export function dependencyCandidates(): DependencyCandidate[] {
       currentRanges: ["9.0.0-DEMO-1"],
       usedBy: consumers.slice(0, 2),
       isDevDependency: false,
+      sections: ["peer"],
     },
     {
       name: "vue",
@@ -98,7 +101,8 @@ export function dependencyCandidates(): DependencyCandidate[] {
       branchSuffix: null,
       currentRanges: ["3.5.0"],
       usedBy: consumers,
-      isDevDependency: false,
+      isDevDependency: true,
+      sections: ["peer", "dev"],
     },
     {
       name: "typescript",
@@ -108,6 +112,7 @@ export function dependencyCandidates(): DependencyCandidate[] {
       currentRanges: ["5.9.0"],
       usedBy: consumers,
       isDevDependency: true,
+      sections: ["dev"],
     },
   ];
 }
@@ -140,6 +145,7 @@ export function scannedProjects(): ScannedProject[] {
       kind: isLibrary ? "library" : "application",
       dependencies,
       devDependencies: {},
+      peerDependencies: {},
       hasBuildScript: true,
       configPath,
       configuredName: known.get(configPath) ?? null,

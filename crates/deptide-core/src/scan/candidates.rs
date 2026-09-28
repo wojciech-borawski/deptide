@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::git::{branch_suffix, compile_branch_pattern};
-use crate::domain::{DependencyCandidate, DetectedProject};
+use crate::domain::{DependencyCandidate, DependencySection, DetectedProject};
 
 fn clean_range(range: &str) -> String {
     range
@@ -37,43 +37,54 @@ pub fn collect_dependency_candidates(
 
     let mut candidates: Vec<DependencyCandidate> = Vec::new();
 
-    let mut register = |project: &DetectedProject, name: &str, range: &str, is_dev: bool| {
-        let position = match candidates.iter().position(|entry| entry.name == name) {
-            Some(position) => position,
-            None => {
-                let local = locals.get(name);
-                candidates.push(DependencyCandidate {
-                    name: name.to_string(),
-                    local_version: local.map(|entry| entry.version.to_string()),
-                    local_branch: local.and_then(|entry| entry.branch.map(str::to_string)),
-                    branch_suffix: local
-                        .and_then(|entry| entry.branch)
-                        .and_then(|branch| branch_suffix(branch, &pattern)),
-                    current_ranges: Vec::new(),
-                    used_by: Vec::new(),
-                    is_dev_dependency: is_dev,
-                });
-                candidates.len() - 1
+    let mut register =
+        |project: &DetectedProject, name: &str, range: &str, section: DependencySection| {
+            let position = match candidates.iter().position(|entry| entry.name == name) {
+                Some(position) => position,
+                None => {
+                    let local = locals.get(name);
+                    candidates.push(DependencyCandidate {
+                        name: name.to_string(),
+                        local_version: local.map(|entry| entry.version.to_string()),
+                        local_branch: local.and_then(|entry| entry.branch.map(str::to_string)),
+                        branch_suffix: local
+                            .and_then(|entry| entry.branch)
+                            .and_then(|branch| branch_suffix(branch, &pattern)),
+                        current_ranges: Vec::new(),
+                        used_by: Vec::new(),
+                        is_dev_dependency: true,
+                        sections: Vec::new(),
+                    });
+                    candidates.len() - 1
+                }
+            };
+
+            let candidate = &mut candidates[position];
+            let cleaned = clean_range(range);
+            if !cleaned.is_empty() && !candidate.current_ranges.contains(&cleaned) {
+                candidate.current_ranges.push(cleaned);
             }
+            if !candidate.used_by.contains(&project.proposed_name) {
+                candidate.used_by.push(project.proposed_name.clone());
+            }
+            if let Err(index) = candidate.sections.binary_search(&section) {
+                candidate.sections.insert(index, section);
+            }
+            let dev_in_project = project.dev_dependencies.contains_key(name)
+                && !project.dependencies.contains_key(name);
+            candidate.is_dev_dependency = candidate.is_dev_dependency && dev_in_project;
         };
 
-        let candidate = &mut candidates[position];
-        let cleaned = clean_range(range);
-        if !cleaned.is_empty() && !candidate.current_ranges.contains(&cleaned) {
-            candidate.current_ranges.push(cleaned);
-        }
-        if !candidate.used_by.contains(&project.proposed_name) {
-            candidate.used_by.push(project.proposed_name.clone());
-        }
-        candidate.is_dev_dependency = candidate.is_dev_dependency && is_dev;
-    };
-
     for project in consumers {
-        for (name, range) in &project.dependencies {
-            register(project, name, range, false);
-        }
-        for (name, range) in &project.dev_dependencies {
-            register(project, name, range, true);
+        let sections = [
+            (&project.dependencies, DependencySection::Dependencies),
+            (&project.peer_dependencies, DependencySection::Peer),
+            (&project.dev_dependencies, DependencySection::Dev),
+        ];
+        for (entries, section) in sections {
+            for (name, range) in entries {
+                register(project, name, range, section);
+            }
         }
     }
 

@@ -2,7 +2,7 @@ mod common;
 
 use common::TempDir;
 use deptide_core::domain::{
-    ExecutionMode, PackageSpec, SavedRun, Settings, StepName, VersionPolicy,
+    BumpWhen, ExecutionMode, PackageSpec, SavedRun, Settings, StepName, VersionBump, VersionPolicy,
 };
 use deptide_core::workspace::{
     delete_run, list_runs, load_config, load_run, load_settings, parse_config_text, save_config,
@@ -127,4 +127,141 @@ fn run_names_are_suggested_from_the_first_package() {
     let suggestion = suggest_run_name(&["@acme/core".to_string(), "@acme/ui".to_string()]);
     assert!(suggestion.ends_with("-core-plus-1"));
     assert!(suggest_run_name(&[]).ends_with("-update"));
+}
+
+fn parse_policy(text: &str) -> VersionPolicy {
+    serde_json::from_str(text).unwrap_or_else(|error| panic!("{text} does not parse: {error}"))
+}
+
+#[test]
+fn version_policies_saved_before_the_bump_condition_existed_keep_their_meaning() {
+    assert_eq!(
+        parse_policy(r#"{"bump":"minor","onlyIfSameAsMain":true}"#),
+        VersionPolicy {
+            bump: VersionBump::Minor,
+            when: BumpWhen::SameAsMain,
+        }
+    );
+    assert_eq!(
+        parse_policy(r#"{"bump":"minor","onlyIfSameAsMain":false}"#),
+        VersionPolicy {
+            bump: VersionBump::Minor,
+            when: BumpWhen::Always,
+        }
+    );
+    assert_eq!(
+        parse_policy(r#"{"bump":"major"}"#),
+        VersionPolicy {
+            bump: VersionBump::Major,
+            when: BumpWhen::Always,
+        }
+    );
+    assert_eq!(parse_policy("{}"), VersionPolicy::default());
+}
+
+#[test]
+fn the_bump_condition_wins_over_the_old_flag() {
+    assert_eq!(
+        parse_policy(r#"{"bump":"patch","when":"not-bumped-on-branch","onlyIfSameAsMain":true}"#)
+            .when,
+        BumpWhen::NotBumpedOnBranch
+    );
+    assert_eq!(
+        parse_policy(r#"{"bump":"patch","when":"always","onlyIfSameAsMain":true}"#).when,
+        BumpWhen::Always
+    );
+}
+
+#[test]
+fn version_policies_are_written_with_the_bump_condition_only() {
+    for (when, text) in [
+        (BumpWhen::Always, "always"),
+        (BumpWhen::SameAsMain, "same-as-main"),
+        (BumpWhen::NotBumpedOnBranch, "not-bumped-on-branch"),
+    ] {
+        let policy = VersionPolicy {
+            bump: VersionBump::Minor,
+            when,
+        };
+        let json = serde_json::to_value(policy).unwrap();
+
+        assert_eq!(json, serde_json::json!({ "bump": "minor", "when": text }));
+        assert_eq!(
+            serde_json::from_value::<VersionPolicy>(json).unwrap(),
+            policy
+        );
+    }
+}
+
+#[test]
+fn a_saved_run_file_from_before_the_bump_condition_still_loads() {
+    let root = TempDir::new("config-old-run");
+    let workspace = Workspace::open(root.path()).expect("workspace");
+    std::fs::create_dir_all(workspace.runs_directory()).unwrap();
+    std::fs::write(
+        workspace.runs_directory().join("old.json"),
+        r#"{
+          "name": "old",
+          "savedAt": "2026-01-01T00:00:00Z",
+          "projects": ["web"],
+          "packages": [{ "name": "@acme/core", "version": "1.0.0", "saveDev": false }],
+          "steps": ["install", "version"],
+          "concurrency": 2,
+          "version": { "bump": "minor", "onlyIfSameAsMain": true }
+        }"#,
+    )
+    .unwrap();
+
+    let run = load_run(&workspace, "old").expect("the old run is listed");
+
+    assert_eq!(
+        run.version,
+        VersionPolicy {
+            bump: VersionBump::Minor,
+            when: BumpWhen::SameAsMain,
+        }
+    );
+}
+
+#[test]
+fn a_saved_run_from_before_peer_installs_loads_its_packages_as_non_peer() {
+    let root = TempDir::new("config-old-peer");
+    let workspace = Workspace::open(root.path()).expect("workspace");
+    std::fs::create_dir_all(workspace.runs_directory()).unwrap();
+    std::fs::write(
+        workspace.runs_directory().join("old.json"),
+        r#"{
+          "name": "old",
+          "savedAt": "2026-01-01T00:00:00Z",
+          "projects": ["web"],
+          "packages": [{ "name": "@acme/core", "version": "1.0.0", "saveDev": true }],
+          "steps": ["install"],
+          "concurrency": 2
+        }"#,
+    )
+    .unwrap();
+
+    let run = load_run(&workspace, "old").expect("the old run is listed");
+    assert!(run.packages[0].save_dev);
+    assert!(!run.packages[0].save_peer);
+}
+
+#[test]
+fn a_peer_package_round_trips_through_json_as_save_peer() {
+    let peer = PackageSpec {
+        save_peer: true,
+        ..PackageSpec::new("a", "1.0.0")
+    };
+    let json = serde_json::to_value(&peer).unwrap();
+    assert_eq!(json["savePeer"], true);
+    assert_eq!(serde_json::from_value::<PackageSpec>(json).unwrap(), peer);
+}
+
+#[test]
+fn a_config_package_can_ask_for_a_peer_install() {
+    let config = parse_config_text(
+        r#"{"packages":[{ "name": "@acme/ui", "version": "9.0.0", "savePeer": true }]}"#,
+    )
+    .unwrap();
+    assert!(config.packages[0].save_peer);
 }

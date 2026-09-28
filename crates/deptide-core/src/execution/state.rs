@@ -4,6 +4,7 @@ use std::time::Instant;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use super::steps::ManifestEntry;
 use crate::domain::{
     DependencyChange, Diagnosis, ExecutionMode, InstalledPackage, Job, JobSnapshot, JobStatus,
     RunProjectSummary, RunSnapshot, RunSummary, StepName, StepTiming,
@@ -64,6 +65,8 @@ pub struct JobState {
     pub dependency_changes: Vec<DependencyChange>,
     pub retries: u32,
     pub backup_directory: Option<PathBuf>,
+    /// The packages' `package.json` entries from before the first package step, until restored.
+    pub saved_entries: Option<Vec<ManifestEntry>>,
 }
 
 impl JobState {
@@ -85,6 +88,7 @@ impl JobState {
             dependency_changes: Vec::new(),
             retries: 0,
             backup_directory: None,
+            saved_entries: None,
         }
     }
 

@@ -5,6 +5,7 @@ use tauri::{Manager, WindowEvent};
 use app::commands;
 use app::state::AppState;
 use app::{error_log, tray};
+use deptide_core::transfer::ReceiveClipboard;
 
 pub fn run() {
     tauri::Builder::default()
@@ -12,6 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
+        .manage(ReceiveClipboard::default())
         .setup(|app| {
             if let Ok(log_directory) = app.path().app_log_dir() {
                 error_log::install(&log_directory);
@@ -52,7 +54,10 @@ pub fn run() {
             commands::preview_transfer,
             commands::copy_projects_to_clipboard,
             commands::inspect_clipboard,
+            commands::download_clipboard,
+            commands::cancel_clipboard_download,
             commands::analyze_receive,
+            commands::read_receive_file,
             commands::apply_receive,
         ])
         .run(tauri::generate_context!())

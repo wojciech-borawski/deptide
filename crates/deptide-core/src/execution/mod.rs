@@ -3,6 +3,7 @@ mod command;
 mod diagnose;
 mod jobs;
 mod logger;
+mod manifest;
 mod pipeline;
 mod report;
 mod scheduler;
@@ -26,6 +27,7 @@ pub use logger::{list_summaries, RunLogger};
 pub use report::{render_html, render_markdown};
 pub use scheduler::execute_run;
 pub use state::{JobState, ProgressSink, RunEvent, RunOptions, RunState, MAX_LOG_LINES};
+pub use steps::{plan_install, PlannedCommand};
 pub use verify::{
     describe_installed, diff_dependencies, read_top_level_versions, short_integrity,
     verify_installed,

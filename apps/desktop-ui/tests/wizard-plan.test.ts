@@ -7,6 +7,7 @@ import {
   choiceProblem,
   createChoice,
   draftProblems,
+  isPeerOnly,
   orderedSteps,
   parseArguments,
   resolveVersion,
@@ -22,6 +23,7 @@ const core: DependencyCandidate = {
   currentRanges: ["3.0.0"],
   usedBy: ["web", "api"],
   isDevDependency: false,
+  sections: ["dependencies"],
 };
 
 const vue: DependencyCandidate = {
@@ -32,6 +34,7 @@ const vue: DependencyCandidate = {
   currentRanges: ["3.5.0"],
   usedBy: ["web"],
   isDevDependency: true,
+  sections: ["dev", "peer"],
 };
 
 function draft(overrides: Partial<WizardDraft> = {}): WizardDraft {
@@ -45,7 +48,7 @@ function draft(overrides: Partial<WizardDraft> = {}): WizardDraft {
     dryRun: false,
     extraInstallArgs: "  --force   --legacy-peer-deps ",
     versionBump: "minor",
-    bumpOnlyIfSameAsMain: true,
+    bumpWhen: "not-bumped-on-branch",
     label: "  ",
     saveRun: true,
     saveName: "",
@@ -59,6 +62,41 @@ describe("createChoice", () => {
     expect(createChoice({ ...core, branchSuffix: null }).mode).toBe("local");
     expect(createChoice(vue).mode).toBe("keep");
     expect(createChoice(vue).saveDev).toBe(true);
+  });
+
+  it("keeps the sections the candidate was found in", () => {
+    expect(createChoice(core).sections).toEqual(["dependencies"]);
+    expect(createChoice(vue).sections).toEqual(["dev", "peer"]);
+  });
+});
+
+describe("selectedPackages sections", () => {
+  const peerOnly: DependencyCandidate = { ...vue, name: "@acme/ui", isDevDependency: false, sections: ["peer"] };
+  const peerAndDependency: DependencyCandidate = { ...core, name: "@acme/theme", sections: ["dependencies", "peer"] };
+
+  it("marks only packages found solely in peerDependencies as peer installs", () => {
+    const current = draft({
+      choices: [createChoice(core), createChoice(vue), createChoice(peerOnly), createChoice(peerAndDependency)],
+    });
+    for (const choice of current.choices) choice.selected = true;
+
+    const flags = selectedPackages(current).map(({ name, saveDev, savePeer }) => ({ name, saveDev, savePeer }));
+
+    expect(flags).toEqual([
+      { name: "@acme/core", saveDev: false, savePeer: false },
+      { name: "vue", saveDev: true, savePeer: false },
+      { name: "@acme/ui", saveDev: false, savePeer: true },
+      { name: "@acme/theme", saveDev: false, savePeer: false },
+    ]);
+  });
+});
+
+describe("isPeerOnly", () => {
+  it("is true only when every section is peerDependencies", () => {
+    expect(isPeerOnly(["peer"])).toBe(true);
+    expect(isPeerOnly(["dependencies", "peer"])).toBe(false);
+    expect(isPeerOnly(["peer", "dev"])).toBe(false);
+    expect(isPeerOnly([])).toBe(false);
   });
 });
 
@@ -89,16 +127,16 @@ describe("buildRunPlan", () => {
   it("orders steps, trims arguments and derives labels", () => {
     const current = draft();
     current.choices[0]!.selected = true;
-    current.manualPackages = [{ name: "left-pad", version: "1.3.0", saveDev: false }];
+    current.manualPackages = [{ name: "left-pad", version: "1.3.0", saveDev: false, savePeer: false }];
 
     const plan = buildRunPlan(current);
 
     expect(plan.steps).toEqual(["uninstall", "install"]);
     expect(plan.extraInstallArgs).toEqual(["--force", "--legacy-peer-deps"]);
-    expect(plan.version).toEqual({ bump: "minor", onlyIfSameAsMain: true });
+    expect(plan.version).toEqual({ bump: "minor", when: "not-bumped-on-branch" });
     expect(plan.packages).toEqual([
-      { name: "@acme/core", version: "3.1.0-ABC-123", saveDev: false },
-      { name: "left-pad", version: "1.3.0", saveDev: false },
+      { name: "@acme/core", version: "3.1.0-ABC-123", saveDev: false, savePeer: false },
+      { name: "left-pad", version: "1.3.0", saveDev: false, savePeer: false },
     ]);
     expect(plan.label).toBe("update");
     expect(plan.saveAs).toBe("update");
@@ -108,10 +146,19 @@ describe("buildRunPlan", () => {
   it("lets a manual package override a candidate with the same name", () => {
     const current = draft();
     current.choices[0]!.selected = true;
-    current.manualPackages = [{ name: "@acme/core", version: "9.9.9", saveDev: false }];
+    current.manualPackages = [{ name: "@acme/core", version: "9.9.9", saveDev: false, savePeer: false }];
 
-    expect(selectedPackages(current)).toEqual([{ name: "@acme/core", version: "9.9.9", saveDev: false }]);
+    expect(selectedPackages(current)).toEqual([
+      { name: "@acme/core", version: "9.9.9", saveDev: false, savePeer: false },
+    ]);
   });
+
+  it.each(["always", "same-as-main", "not-bumped-on-branch"] as const)(
+    "carries the bump condition %s into the plan",
+    (bumpWhen) => {
+      expect(buildRunPlan(draft({ bumpWhen })).version).toEqual({ bump: "minor", when: bumpWhen });
+    },
+  );
 
   it("does not save when the switch is off", () => {
     expect(buildRunPlan(draft({ saveRun: false })).saveAs).toBeNull();

@@ -1,5 +1,20 @@
-import type { RunPlan, RunSnapshot, RunSummary, ScannedProject, Settings, UpdateConfig } from "@/api/types";
+import type { Channel } from "@tauri-apps/api/core";
+
+import type {
+  ExtractProgress,
+  ReceiveRequest,
+  ReceiveSelection,
+  RunPlan,
+  RunSnapshot,
+  RunSummary,
+  ScannedProject,
+  Settings,
+  UpdateConfig,
+} from "@/api/types";
+import { cancelMockDownload, mockClipboard, mockDownload } from "./clipboard";
 import { registerListener } from "./events";
+import { mockFileStatus, mockReceivePlan, mockReceiveResult } from "./receive";
+import { mockReceiveFile } from "./receive-files";
 import { MockRun } from "./run";
 import {
   delay,
@@ -94,7 +109,7 @@ export async function handleMockCommand(command: string, args: Record<string, un
         concurrency: Number(args.concurrency),
         dryRun: false,
         extraInstallArgs: [],
-        version: { bump: "patch", onlyIfSameAsMain: false },
+        version: { bump: "patch", when: "always" },
         label: `cmd: ${String(args.command)}`,
         saveAs: null,
       };
@@ -137,11 +152,15 @@ export async function handleMockCommand(command: string, args: Record<string, un
     case "preview_transfer": {
       await delay(300);
       const names = args.projectNames as string[];
+      const disabled = new Set((args.disabledPatterns as string[]).map((pattern) => pattern.trim()));
+      const configured = (workspaceState.config.transferIgnore ?? []).filter(
+        (pattern) => !disabled.has(pattern.trim()),
+      );
       return {
         projects: transferProjects(names, null),
         files: 42 * names.length,
         bytes: 812_000 * names.length,
-        patterns: [...(workspaceState.config.transferIgnore ?? []), ...(args.extraPatterns as string[])],
+        patterns: [...configured, ...(args.extraPatterns as string[])],
       };
     }
     case "copy_projects_to_clipboard": {
@@ -158,65 +177,24 @@ export async function handleMockCommand(command: string, args: Record<string, un
       };
     }
     case "inspect_clipboard":
-      return {
-        entries: [
-          {
-            path: "C:\\Temp\\deptide-transfer\\x\\Shop-Admin",
-            name: "Shop-Admin",
-            isProject: true,
-            packageName: "shop-admin",
-            suggestedProject: "Shop-Admin",
-          },
-          {
-            path: "C:\\Temp\\deptide-transfer\\x\\somewhere-else",
-            name: "somewhere-else",
-            isProject: true,
-            packageName: "else",
-            suggestedProject: null,
-          },
-        ],
-      };
-    case "analyze_receive":
+      return mockClipboard();
+    case "download_clipboard":
+      return mockDownload(Number(args.sequence), args.onProgress as Channel<ExtractProgress>);
+    case "cancel_clipboard_download":
+      cancelMockDownload();
+      return null;
+    case "analyze_receive": {
       await delay(400);
-      return {
-        projects: (args.requests as { source: string; target: string }[]).map((request) => ({
-          source: request.source,
-          target: request.target,
-          targetDirectory: `${projectsRoot}\\${request.target}`,
-          files: [
-            { relative: "src/App.vue", status: "replaced", size: 4210 },
-            { relative: "src/components/NewPanel.vue", status: "added", size: 1980 },
-            { relative: "package.json", status: "replaced", size: 902 },
-            { relative: "README.md", status: "identical", size: 300 },
-          ],
-          skipped: 2,
-          added: 1,
-          replaced: 2,
-          identical: 1,
-          onlyInTarget: [
-            { relative: "src/components/OldPanel.vue", size: 1620 },
-            { relative: "src/legacy.ts", size: 410 },
-          ],
-        })),
-      };
-    case "apply_receive": {
-      await delay(500);
-      const selections = args.selections as { source: string; target: string; files: string[] }[];
-      return {
-        projects: selections.map((selection) => ({
-          target: selection.target,
-          targetDirectory: `${projectsRoot}\\${selection.target}`,
-          added: selection.files.filter((file) => file.includes("New")).length,
-          replaced: selection.files.filter((file) => !file.includes("New")).length,
-          bytes: selection.files.length * 2000,
-          files: selection.files,
-        })),
-        files: selections.reduce((sum, selection) => sum + selection.files.length, 0),
-        bytes: 6000,
-        receivedAt: new Date().toISOString(),
-        logFile: `${fakeRoot}\\transfers\\receive.json`,
-      };
+      return mockReceivePlan(args.requests as ReceiveRequest[], args.disabledPatterns as string[]);
     }
+    case "read_receive_file": {
+      await delay(120);
+      const relative = String(args.relative);
+      return mockReceiveFile(relative, mockFileStatus(String(args.target), relative));
+    }
+    case "apply_receive":
+      await delay(500);
+      return mockReceiveResult(args.selections as ReceiveSelection[]);
     case "error_log_path":
       return `${fakeRoot}\\logs\\deptide-errors.log`;
     default:

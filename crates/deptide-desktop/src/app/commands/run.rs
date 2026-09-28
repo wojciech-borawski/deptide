@@ -9,7 +9,7 @@ use crate::app::events::TauriSink;
 use crate::app::state::AppState;
 use crate::app::tray;
 use deptide_core::domain::{
-    ExecutionMode, Job, RunPlan, RunSnapshot, RunSummary, SavedRun, StepName,
+    BumpWhen, ExecutionMode, Job, RunPlan, RunSnapshot, RunSummary, SavedRun, StepName,
 };
 use deptide_core::error::{AppError, AppResult};
 use deptide_core::execution::{
@@ -100,10 +100,10 @@ fn update_log_header(
     ];
 
     if steps.contains(&StepName::Version) {
-        let condition = if plan.version.only_if_same_as_main {
-            " (only when still equal to main)"
-        } else {
-            ""
+        let condition = match plan.version.when {
+            BumpWhen::Always => "",
+            BumpWhen::SameAsMain => " (only when still equal to main)",
+            BumpWhen::NotBumpedOnBranch => " (only when not yet bumped on this branch)",
         };
         header.push(format!(
             "version:     {}{condition}",
@@ -278,5 +278,50 @@ pub fn render_run_report(summary: RunSummary, format: String) -> AppResult<Strin
         "markdown" => Ok(render_markdown(&summary)),
         "html" => Ok(render_html(&summary)),
         other => Err(AppError::new(format!("Unknown report format {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use deptide_core::domain::{
+        BumpWhen, ExecutionMode, RunPlan, StepName, VersionBump, VersionPolicy,
+    };
+
+    use super::update_log_header;
+
+    fn version_line(when: BumpWhen) -> String {
+        let plan = RunPlan {
+            project_names: vec!["web".to_string()],
+            packages: vec![],
+            steps: vec![StepName::Version],
+            mode: ExecutionMode::PerProject,
+            concurrency: 1,
+            dry_run: false,
+            extra_install_args: vec![],
+            label: "bump".to_string(),
+            save_as: None,
+            version: VersionPolicy {
+                bump: VersionBump::Minor,
+                when,
+            },
+        };
+
+        update_log_header(&plan, &[], &[StepName::Version], 1)
+            .into_iter()
+            .find(|line| line.starts_with("version:"))
+            .expect("a version line")
+    }
+
+    #[test]
+    fn the_log_header_names_the_bump_condition() {
+        assert_eq!(version_line(BumpWhen::Always), "version:     minor");
+        assert_eq!(
+            version_line(BumpWhen::SameAsMain),
+            "version:     minor (only when still equal to main)"
+        );
+        assert_eq!(
+            version_line(BumpWhen::NotBumpedOnBranch),
+            "version:     minor (only when not yet bumped on this branch)"
+        );
     }
 }

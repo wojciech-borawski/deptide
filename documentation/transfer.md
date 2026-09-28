@@ -10,7 +10,13 @@ clipboard, which remote desktop sessions share. It has two tabs.
    - each project's own `.gitignore` (plus the global git excludes), which is
      what keeps `node_modules`, `dist` and similar out,
    - the patterns stored in `update-libs.json` under `transferIgnore`, edited
-     in Settings and applied to every copy and receive,
+     in Settings and applied to every copy and receive. They show as chips;
+     clicking one leaves that pattern out of this run only (the chip is
+     struck through), clicking it again brings it back. On the Copy tab a
+     click clears the preview, and the chips are disabled while a preview or
+     copy runs. Copy and Receive keep
+     their own set, it lives in memory until the app restarts and is never
+     written to the settings,
    - the patterns typed on the Copy tab, which apply to this copy only and are
      not saved.
      The `.git` folder is never copied.
@@ -29,22 +35,195 @@ written to `transfers/<stamp>-copy.json` in the workspace.
 While the Receive tab is open, Deptide checks the clipboard every two seconds
 for folders. Each folder that holds a `package.json` is matched to a configured
 project by folder name, by the target folder name, or by the package name; the
-match can be changed or set to "Do not receive". Run-only ignore patterns can
-be added here as well.
+match can be changed or set to "Do not receive". The configured ignore
+patterns show as chips that can be switched off for this run, as on the Copy
+tab; switching one while a plan is shown runs Analyze again, keeping the
+results of projects already replaced and the ticks of files whose status did
+not change. The chips and the Analyze button are disabled while Analyze runs,
+and only the answer to the latest Analyze is shown. Run-only ignore patterns
+can be added here as well.
 
-"Analyze" compares the incoming files with the target project and classifies
-each as new, replaced or identical (by size and SHA-256). New and replaced
-files are ticked, identical ones are not; any file can be unticked. "Replace
-selected files" copies exactly the ticked files into the target folders and
-never deletes anything. Files that exist in the target project but not in the
-received folder are listed separately under "only on this machine" (judged with
-the same ignore rules, so build output and `node_modules` do not appear); they
-may have been deleted on the other side and are candidates for manual removal
-after the merge. The result panel lists what landed per project, and
-`transfers/<stamp>-receive.json` records the same.
+### Where the folders come from
+
+The clipboard can hold folders in two ways, and Receive handles both without a
+switch. A line above the folder list says which one it found:
+
+- **A file list** (`CF_HDROP`), which Explorer and Deptide's own Copy put
+  there: "Source: file list on the clipboard". Each folder shows its path and
+  Analyze reads it where it is.
+- **Files a remote desktop offers without a path** (Citrix, RDP): "Source:
+  files from a remote desktop, not downloaded yet". Names and sizes are known,
+  the contents are not, so each folder shows its file count and size instead
+  of a path (the size is left out when a file came without one). Analyze first
+  downloads the whole clipboard into a new folder under
+  `%TEMP%\deptide-received\<stamp>`, one subfolder per folder on the
+  clipboard; the five newest download folders are kept. The line then reads
+  "Source: downloaded to <folder>", each folder shows where it landed, and the
+  plan, the file preview and Replace work on the downloaded folders.
+
+While the download runs, a progress bar shows files and bytes done out of the
+total (a moving stripe while the total size is not known yet), with a Cancel
+button. The bar appears with the first progress report, or after 300 ms if
+none has come. Analyze, the target lists, the ignore chips and Replace are
+disabled from the moment Analyze is pressed until the download ends. A
+cancelled or failed download shows its error in the error banner and leaves
+no plan; "The remote desktop stopped sending files" means nothing arrived for
+60 seconds. Every Analyze, chip toggle, or analysis after a failed replace asks
+the backend for the download again; on the same clipboard the backend returns
+the earlier download at once, without a progress bar, as long as all its
+folders still exist, and downloads again otherwise. If a folder on the
+clipboard is missing from the download, the error banner says so and asks to
+copy the folders again on the remote desktop; no plan is shown.
+
+Other lines that can appear:
+
+- "N files skipped because their names are not safe on Windows": these files
+  are never downloaded (the rules are under
+  [Files without a path on the clipboard](#files-without-a-path-on-the-clipboard)).
+- "The clipboard is busy, trying again": another program held the clipboard.
+  The folders, targets and plan on screen stay as they were until the next
+  check reads it.
+- The reason the clipboard could not be read. The folder list is emptied.
+
+A new clipboard (other folders, or the same folders copied again in the remote
+session) clears the targets, the plan and the kept download. The answer to an
+Analyze or download that started before the change is dropped; a check that
+finds the same clipboard, including one during a download, changes nothing.
+
+Ignore files above a received folder, such as a stray `%TEMP%\.gitignore`, are
+not applied to it. What applies is the ignore patterns, the `.gitignore` and
+`.ignore` files inside the folder and its subfolders, `.git\info\exclude` of a
+Git repository inside the folder, and this machine's global Git excludes file
+(`core.excludesFile` from the user's Git config, otherwise
+`.config\git\ignore` in the home folder).
+
+### Analyze
+
+"Analyze" compares the incoming files with the target project and gives each
+file one status:
+
+| status          | meaning                                                          | pill |
+| --------------- | ---------------------------------------------------------------- | ---- |
+| new             | not in the target project                                        | `+N` |
+| replaced        | content differs                                                  | `~N` |
+| whitespace only | differs only in whitespace                                       | `≈N` |
+| identical       | same size and SHA-256                                            |      |
+| removed         | in the target project but not in the received folder (see below) | `−N` |
+
+Removed files are judged with the same ignore rules as the received files, so
+build output and `node_modules` never show up as removed.
+
+Each project with at least one file that is not identical gets a tab. Its
+label shows the project name and one pill per status with a count above zero,
+counted over the whole project. Projects where every file is identical get no
+tab; they are named in one collapsed "No changes" row and are never part of a
+replace. The cross on a tab takes the project out of this receive: its target
+becomes "Do not receive" and its plan is dropped. Picking a target again and
+running Analyze brings it back. The Left and Right arrow keys move between
+tabs; the cross is left out of the keyboard order, and "Do not receive" in the
+folder list does the same from the keyboard.
+
+New, replaced and removed files start ticked; whitespace-only and identical
+files do not. The chips "Only changes", "All" and "None" reset the ticks of
+one tab; "All" ticks the files the tab currently shows, so identical files
+only while "Only affected" is off. The tab toolbar also holds three view options, shared by all tabs and
+remembered between launches:
+
+- List or Tree. The tree folds folders with a chevron; a folder checkbox ticks
+  or unticks every visible file below it and shows a dash when only some are
+  ticked. Folders start expanded when they hold a file that is not identical.
+  Folder rows show the pills of their subtree.
+- Only affected (on by default) hides identical files. In the tree, folders
+  with nothing left to show disappear. Turning it on also unticks identical
+  files in every tab, so a replace never includes a file that is not shown.
+- Sort, in the list only: by path, or by change, which groups the files as
+  replaced, whitespace only, new, removed, identical, each group in path
+  order.
+
+"Replace selected in this project" applies one tab, "Replace selected in all
+projects" applies every tab that has not been applied yet. Ticked files are
+copied into the target folder; ticked removed files are deleted from it. When
+the replace includes at least one removed file, a dialog first lists those
+files per project; "Delete and replace" goes ahead, "Cancel" changes nothing.
+Every file that is overwritten or deleted is moved to the Recycle Bin first,
+so a replace can be undone from there. If moving to the Recycle Bin fails,
+nothing is copied into that project.
+
+Projects are applied in order and a replace stops at the first project that
+fails, so the ones before it are already changed. After a failed replace
+Deptide runs Analyze again for the projects on screen, with the ignore
+patterns of the plan shown, and keeps the error visible; the tabs then show
+what is left to do.
+
+An applied tab turns into its result: counts of new, replaced, deleted and
+recycled files, the paths that failed validation and were left alone, and the
+copied and deleted files. Other tabs keep their plan. "Close" on the result
+takes the project out of this receive, like the cross on its tab. `transfers/<stamp>-receive.json` records every replace.
 
 Paths containing `..` are rejected, so a crafted folder on the clipboard cannot
 write outside the target project.
+
+### File preview
+
+Clicking a file row opens a preview to the right of the list, inside the tab;
+when the tab is narrower than 1100px the preview sits under the list instead.
+The previewed row is highlighted. Clicking a checkbox only ticks the file. The
+cross in the preview header closes it.
+
+The list is announced as a listbox (a tree in the tree view) whose active row
+follows the keyboard. The list itself is a Tab stop, and so is each checkbox in
+its rows; in the tree each folder chevron and folder checkbox is one too. Each
+row is announced once by its path (its name in the tree) and status, and the
+previewed row is described as shown in the preview. With the list focused,
+the up and down arrow keys move through the visible rows, and the preview
+follows while it is open. In the list the rows are the files. In the tree
+folders are rows too: the preview stays on its file while the cursor is on a
+folder, Right expands a collapsed folder or moves into an expanded one, Left
+collapses an expanded folder or moves to the parent folder, and Enter expands
+or collapses the folder. Enter on a file opens the preview for it and Escape
+closes it. Escape inside the preview closes it too and puts focus back on the
+list.
+
+What the preview shows depends on the status:
+
+- replaced: a diff, the file on this machine against the received one, with
+  three lines of context around each change. Longer unchanged runs fold into
+  an "N unchanged lines" row that expands on click. Changed words inside a
+  changed line are highlighted.
+- whitespace only: the same diff with "Hide whitespace changes" switched on.
+  Hiding ignores all whitespace inside lines, line endings and blank lines
+  that were only added or removed, like `git diff -w`. With the switch off,
+  changed lines whose line endings differ show the ending (␍␊, ␊, ␍, or ⊘ for
+  no final line break). The switch is also offered for replaced files, off
+  by default.
+- new: the received file, every line green.
+- removed: the file on this machine, every line red.
+- identical: the file once, without colours.
+
+Diffs can be shown Unified or Side by side; the choice is shared by all tabs
+and remembered between launches. Line numbers of both sides are shown, and a
+note appears when only one side starts with a byte order mark. TypeScript,
+JavaScript, JSON, CSS, SCSS, HTML and Vue, Markdown and YAML files are syntax
+highlighted, picked by extension. Highlighting is switched off, with a note,
+when either side is over 256 KiB.
+
+A side with a NUL byte in its first 8 KiB is shown as "Binary file" with its
+size, and a side over 1 MiB as "File too large to preview". Other text is
+decoded as UTF-8, with invalid bytes replaced.
+
+The line diff gives up when more than 1000 lines would be inserted or removed,
+and then shows the changed middle of the file as one removed block followed
+by one added block, so a rewritten file does not stall the window. A preview
+that would show more than 5000 rows shows a notice with "Show diff anyway"
+instead, and renders only after that click. Rows are counted as the current
+view shows them: collapsed gaps do not count, and in Side by side a removed and
+an added line that share a row count once. Opening a gap or switching the view
+so that more rows would show than the 5000, or than the count already shown
+anyway, brings the notice back.
+
+The preview reads both files through the `read_receive_file` command, which
+rejects paths that `safe_relative` would reject during a replace. The last 20
+files read are cached per received folder and path until the next Analyze.
 
 ## Platform note
 
@@ -55,3 +234,28 @@ clipboard as `text/uri-list` (X11 and Wayland), which is what Deptide reads on
 the other side and what most file managers offer when they copy files. Because
 X11 and Wayland clipboards are served by the owning process, the copied
 folders stay available while Deptide is running.
+
+## Files without a path on the clipboard
+
+A remote desktop client such as Citrix Workspace can offer copied files
+without `CF_HDROP`: `FileGroupDescriptorW` lists relative names, sizes and
+folder flags, and `FileContents` hands out the bytes one file at a time. The
+core library reads these on Windows, and Receive downloads them as described
+under [Where the folders come from](#where-the-folders-come-from).
+
+- `read_clipboard_files` returns `Paths` when `CF_HDROP` is present, and
+  `Virtual` with the file list otherwise. It never reads file contents.
+- `extract_virtual` writes the files into an empty folder, normally the one
+  `create_receive_directory` makes under `%TEMP%\deptide-received`. On any
+  error it removes that folder.
+- The listing keeps the clipboard sequence number read before the file list.
+  Reads check it before and after every file, and fail with "The clipboard
+  changed, analyze again" rather than mix in files from a newer clipboard.
+- Names that are empty or absolute, carry a `:`, or have a segment made only
+  of dots and spaces are skipped and counted in `rejected`.
+- Other programs open the clipboard for up to about 200 ms after each change
+  (seen here: VBoxTray, Explorer, the Citrix client `wfica32.exe`, svchost).
+  ole32 then answers `CLIPBRD_E_CANT_OPEN` or `DV_E_FORMATETC`, and keeps the
+  failure for as long as the data object from `OleGetClipboard` lives. Each
+  read therefore drops that object and fetches a new one, `BUSY_ATTEMPTS`
+  times, `BUSY_PAUSE` apart (about one second in all).

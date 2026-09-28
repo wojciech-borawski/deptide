@@ -33,3 +33,29 @@ describe("wizard project selection", () => {
     expect(wizard.draft.projectNames).not.toContain("web");
   });
 });
+
+describe("wizard prefill", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("starts with an unconditional bump and takes the condition from a saved run", () => {
+    const wizard = useWizardStore();
+    expect(wizard.draft.bumpWhen).toBe("always");
+
+    wizard.prefillFromSavedRun({
+      name: "saved",
+      savedAt: "2026-01-01T00:00:00Z",
+      projects: ["web"],
+      packages: [{ name: "left-pad", version: "1.3.0", saveDev: false, savePeer: false }],
+      steps: ["version"],
+      concurrency: 2,
+      mode: "per-project",
+      extraInstallArgs: [],
+      version: { bump: "minor", when: "same-as-main" },
+    });
+
+    expect(wizard.draft.versionBump).toBe("minor");
+    expect(wizard.draft.bumpWhen).toBe("same-as-main");
+  });
+});

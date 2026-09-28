@@ -1,38 +1,77 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
-import type { ReceiveProjectPlan } from "@/api/types";
+import type { ClipboardEntry } from "@/api/types";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import ActionButton from "@/components/ui/ActionButton.vue";
 import NoticeBanner from "@/components/ui/NoticeBanner.vue";
-import { formatBytes, formatDateTime } from "@/lib/format";
+import ProgressBar from "@/components/ui/ProgressBar.vue";
+import { downloadPercent } from "@/lib/clipboard-download";
+import { formatBytes } from "@/lib/format";
+import type { RemovalGroup } from "@/lib/receive-view";
 import { useTransferStore } from "@/stores/transfer";
 import { useWorkspaceStore } from "@/stores/workspace";
+import DeleteConfirmDialog from "./DeleteConfirmDialog.vue";
+import IgnorePatternChips from "./IgnorePatternChips.vue";
+import ReceiveProjectTab from "./ReceiveProjectTab.vue";
+import ReceiveResult from "./ReceiveResult.vue";
+import ReceiveTabs from "./ReceiveTabs.vue";
+
+interface PendingReplace {
+  source: string | undefined;
+  groups: RemovalGroup[];
+}
 
 const workspace = useWorkspaceStore();
 const transfer = useTransferStore();
 const { t } = useI18n();
 
+const pending = ref<PendingReplace | null>(null);
+
 const projectNames = computed(() =>
   workspace.projects.filter((project) => project.exists).map((project) => project.name),
 );
+const globalPatterns = computed(() => workspace.config?.transferIgnore ?? []);
 const canAnalyze = computed(() => transfer.requests.length > 0 && !transfer.receiveBusy);
-const canApply = computed(() => transfer.selectedCount > 0 && !transfer.receiveBusy);
+const activeProject = computed(() => transfer.tabs.find((project) => project.source === transfer.activeSource));
+const activeResult = computed(() => (transfer.activeSource ? transfer.results[transfer.activeSource] : undefined));
+const doneSources = computed(() => Object.keys(transfer.results));
+const rejected = computed(() => transfer.clipboard.rejected);
+const showSource = computed(
+  () => transfer.clipboard.source !== "empty" || rejected.value > 0 || transfer.clipboardBusy,
+);
+const percent = computed(() => (transfer.downloadProgress ? downloadPercent(transfer.downloadProgress) : null));
+const progressText = computed(() => {
+  const progress = transfer.downloadProgress;
+  if (!progress) return "";
+  const files = t("transfer.downloadFiles", { done: progress.filesDone, total: progress.filesTotal });
+  const bytes =
+    progress.bytesTotal === null
+      ? formatBytes(progress.bytesDone)
+      : t("transfer.downloadBytes", { done: formatBytes(progress.bytesDone), total: formatBytes(progress.bytesTotal) });
+  return `${files} · ${bytes}`;
+});
 
-function statusClass(status: string): string {
-  if (status === "added") return "badge-ok";
-  if (status === "replaced") return "badge-warn";
-  return "badge-skipped";
+function entrySize(entry: ClipboardEntry): string {
+  const files = t("transfer.entryFiles", { count: entry.files ?? 0 }, entry.files ?? 0);
+  return entry.bytes === null ? files : `${files} · ${formatBytes(entry.bytes)}`;
 }
 
-function counts(project: ReceiveProjectPlan): string {
-  return t("transfer.planCounts", {
-    added: project.added,
-    replaced: project.replaced,
-    identical: project.identical,
-    skipped: project.skipped,
-  });
+function closeActive(): void {
+  if (transfer.activeSource) transfer.closeProject(transfer.activeSource);
+}
+
+function replace(source?: string): void {
+  const groups = transfer.removalsFor(source);
+  if (groups.length) pending.value = { source, groups };
+  else void transfer.apply(workspace.root, source);
+}
+
+function confirmReplace(): void {
+  const source = pending.value?.source;
+  pending.value = null;
+  void transfer.apply(workspace.root, source);
 }
 
 onMounted(() => transfer.startWatching(workspace.root));
@@ -49,24 +88,45 @@ onBeforeUnmount(() => transfer.stopWatching());
         <span class="row muted"><span class="spinner" /> {{ t("transfer.watching") }}</span>
       </div>
 
+      <div v-if="showSource" class="clipboard-source small">
+        <p v-if="transfer.clipboard.source === 'paths'">{{ t("transfer.sourcePaths") }}</p>
+        <p v-else-if="transfer.clipboard.source === 'virtual' && transfer.download">
+          <i18n-t keypath="transfer.sourceDownloaded" tag="span">
+            <template #folder
+              ><span class="mono selectable">{{ transfer.download.directory }}</span></template
+            >
+          </i18n-t>
+        </p>
+        <p v-else-if="transfer.clipboard.source === 'virtual'">{{ t("transfer.sourceRemote") }}</p>
+        <p v-else-if="transfer.clipboard.source === 'unreadable'" class="muted selectable">
+          {{ transfer.clipboard.problem ?? t("transfer.sourceUnreadable") }}
+        </p>
+        <p v-if="rejected > 0" class="muted">{{ t("transfer.rejected", { count: rejected }, rejected) }}</p>
+        <p v-if="transfer.clipboardBusy" class="muted">{{ t("transfer.sourceBusy") }}</p>
+      </div>
+
       <p v-if="!transfer.entries.length" class="muted">{{ t("transfer.nothing") }}</p>
 
       <div v-else class="list">
-        <div v-for="entry in transfer.entries" :key="entry.path" class="list-row">
+        <div v-for="entry in transfer.entries" :key="entry.path" class="list-row entry">
           <AppIcon name="folder" :size="16" />
           <span class="details">
             <span class="row">
               <span class="name">{{ entry.name }}</span>
+              <span v-if="entry.files !== null" class="muted small">{{ entrySize(entry) }}</span>
               <span v-if="entry.packageName" class="badge badge-violet mono">{{ entry.packageName }}</span>
               <span v-if="!entry.isProject" class="badge badge-warn">{{ t("transfer.notProject") }}</span>
             </span>
-            <span class="mono muted truncate selectable">{{ entry.path }}</span>
+            <span v-if="transfer.folderFor(entry.path)" class="mono muted truncate selectable">{{
+              transfer.folderFor(entry.path)
+            }}</span>
           </span>
           <label class="target">
             <span class="muted small">{{ t("transfer.target") }}</span>
             <select
               class="select"
               :value="transfer.targets[entry.path] ?? ''"
+              :disabled="transfer.downloading"
               @change="transfer.setTarget(entry.path, ($event.target as HTMLSelectElement).value)"
             >
               <option value="">{{ t("transfer.noTarget") }}</option>
@@ -75,6 +135,13 @@ onBeforeUnmount(() => transfer.stopWatching());
           </label>
         </div>
       </div>
+
+      <IgnorePatternChips
+        :patterns="globalPatterns"
+        :disabled="transfer.receiveDisabled"
+        :busy="transfer.receiveBusy"
+        @toggle="transfer.toggleReceivePattern(workspace.root, $event)"
+      />
 
       <div class="field">
         <label>{{ t("transfer.ignoreRun") }}</label>
@@ -92,99 +159,77 @@ onBeforeUnmount(() => transfer.stopWatching());
           {{ t("transfer.analyze") }}
         </ActionButton>
       </div>
+
+      <div v-if="transfer.downloadShown" class="download">
+        <div class="row">
+          <span class="grow">{{ t("transfer.downloading") }}</span>
+          <span v-if="progressText" class="muted small">{{ progressText }}</span>
+          <ActionButton small icon="close" @click="transfer.cancelDownload()">{{ t("common.cancel") }}</ActionButton>
+        </div>
+        <ProgressBar class="download-bar" :percent="percent ?? 0" :done="false" :indeterminate="percent === null" />
+      </div>
     </section>
 
     <NoticeBanner v-if="transfer.receiveError" tone="error" selectable>{{ transfer.receiveError }}</NoticeBanner>
 
-    <section v-if="transfer.plan" class="card stack">
+    <section v-if="transfer.plan && transfer.plan.projects.length" class="card stack">
       <div class="card-title">
         <h3>{{ t("transfer.planTitle") }}</h3>
         <ActionButton
+          v-if="transfer.tabs.length"
           variant="primary"
           small
           :busy="transfer.receiveBusy"
-          :disabled="!canApply"
-          @click="transfer.apply(workspace.root)"
+          :disabled="transfer.selectedCount === 0"
+          @click="replace()"
         >
-          {{ t("transfer.apply") }} ({{ transfer.selectedCount }})
+          {{ t("transfer.replaceAll", { count: transfer.selectedCount }) }}
         </ActionButton>
       </div>
 
-      <div v-for="project in transfer.plan.projects" :key="project.source" class="project">
-        <div class="toolbar">
-          <strong>{{ project.target }}</strong>
-          <span class="muted">{{ counts(project) }}</span>
-          <span class="spacer" />
-          <button class="chip" type="button" @click="transfer.selectFiles(project.source, 'changes')">
-            {{ t("transfer.selectChanges") }}
-          </button>
-          <button class="chip" type="button" @click="transfer.selectFiles(project.source, 'all')">
-            {{ t("common.all") }}
-          </button>
-          <button class="chip" type="button" @click="transfer.selectFiles(project.source, 'none')">
-            {{ t("common.none") }}
-          </button>
-        </div>
-        <div class="list files">
-          <label
-            v-for="file in project.files"
-            :key="file.relative"
-            class="list-row file"
-            :class="{ selected: transfer.isSelected(project.source, file.relative) }"
-          >
-            <span class="check">
-              <input
-                type="checkbox"
-                :checked="transfer.isSelected(project.source, file.relative)"
-                @change="transfer.toggleFile(project.source, file.relative)"
-              />
-            </span>
-            <span class="mono truncate path">{{ file.relative }}</span>
-            <span class="badge" :class="statusClass(file.status)">{{ t(`transfer.statuses.${file.status}`) }}</span>
-            <span class="mono muted size">{{ formatBytes(file.size) }}</span>
-          </label>
-        </div>
-        <details v-if="project.onlyInTarget.length" class="only-here">
-          <summary>
-            <AppIcon name="warning" :size="14" />
-            {{ t("transfer.onlyHere", { count: project.onlyInTarget.length }) }}
-          </summary>
-          <p class="muted small">{{ t("transfer.onlyHereHint") }}</p>
-          <div class="list files">
-            <div v-for="file in project.onlyInTarget" :key="file.relative" class="list-row file plain">
-              <span class="mono truncate path">{{ file.relative }}</span>
-              <span class="mono muted size">{{ formatBytes(file.size) }}</span>
-            </div>
-          </div>
-        </details>
-      </div>
+      <details v-if="transfer.unchangedProjects.length" class="unchanged">
+        <summary>
+          <AppIcon name="chevronRight" :size="14" class="chevron" />
+          {{ t("transfer.noChanges", { projects: t("common.project", transfer.unchangedProjects.length) }) }}
+        </summary>
+        <ul>
+          <li v-for="project in transfer.unchangedProjects" :key="project.source">
+            <strong>{{ project.target }}</strong>
+            <span class="mono muted small source">{{ project.source }}</span>
+          </li>
+        </ul>
+      </details>
+
+      <template v-if="transfer.tabs.length">
+        <ReceiveTabs
+          :projects="transfer.tabs"
+          :active="transfer.activeSource"
+          :done="doneSources"
+          @select="transfer.setActive"
+          @close="transfer.closeProject"
+        >
+          <ReceiveResult v-if="activeResult" :received="activeResult" @close="closeActive" />
+          <ReceiveProjectTab
+            v-else-if="activeProject"
+            :key="activeProject.source"
+            :project="activeProject"
+            @replace="replace(activeProject.source)"
+          />
+        </ReceiveTabs>
+      </template>
     </section>
 
-    <section v-if="transfer.receiveResult" class="card">
-      <div class="card-title">
-        <h3 class="ok">{{ t("transfer.receivedTitle") }}</h3>
-        <span class="muted"
-          >{{ formatDateTime(transfer.receiveResult.receivedAt) }} ·
-          {{ formatBytes(transfer.receiveResult.bytes) }}</span
-        >
-      </div>
-      <ul class="results">
-        <li v-for="project in transfer.receiveResult.projects" :key="project.target">
-          <strong>{{
-            t("transfer.receivedInto", { added: project.added, replaced: project.replaced, target: project.target })
-          }}</strong>
-          <span class="mono muted small"> {{ project.files.join(", ") }}</span>
-        </li>
-      </ul>
-      <p v-if="transfer.receiveResult.logFile" class="muted small selectable">
-        {{ t("transfer.logWritten", { path: transfer.receiveResult.logFile }) }}
-      </p>
-    </section>
+    <DeleteConfirmDialog
+      :open="pending !== null"
+      :groups="pending?.groups ?? []"
+      @cancel="pending = null"
+      @confirm="confirmReplace"
+    />
   </div>
 </template>
 
 <style scoped>
-.list-row {
+.entry {
   flex-wrap: wrap;
 }
 
@@ -210,62 +255,61 @@ onBeforeUnmount(() => transfer.stopWatching());
   font-size: 12px;
 }
 
-.project {
-  display: flex;
-  flex-direction: column;
+.clipboard-source {
+  display: grid;
+  gap: 2px;
+}
+
+.clipboard-source p {
+  margin: 0;
+}
+
+.download {
+  display: grid;
   gap: 8px;
 }
 
-.files {
-  max-height: 320px;
-  overflow: auto;
-}
-
-.file {
-  cursor: pointer;
-  padding: 6px 12px;
-}
-
-.path {
+.download .grow {
   flex: 1;
-  font-size: 12.5px;
 }
 
-.size {
-  font-size: 11.5px;
-  min-width: 64px;
-  text-align: right;
+.download-bar {
+  height: 6px;
+  border-radius: 3px;
 }
 
-.only-here summary {
-  display: flex;
+.unchanged summary {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  color: var(--warn);
+  color: var(--text-muted);
   font-size: 13px;
   user-select: none;
+  list-style: none;
 }
 
-.only-here p {
-  margin: 6px 0 8px;
+.unchanged summary::-webkit-details-marker {
+  display: none;
 }
 
-.file.plain {
-  cursor: default;
+.unchanged .chevron {
+  transition: transform 0.1s ease;
 }
 
-.results {
-  margin: 0;
-  padding-left: 18px;
+.unchanged[open] .chevron {
+  transform: rotate(90deg);
+}
+
+.unchanged .source {
+  margin-left: 8px;
+}
+
+.unchanged ul {
+  margin: 8px 0 0;
+  padding-left: 26px;
   display: grid;
-  gap: 6px;
-}
-
-.ok {
-  color: var(--ok);
-  text-transform: none;
-  font-size: 15px;
-  letter-spacing: 0;
+  gap: 4px;
+  font-size: 13px;
 }
 </style>

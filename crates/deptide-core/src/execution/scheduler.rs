@@ -147,6 +147,12 @@ async fn run_per_step(context: &Arc<RunContext>, limit: usize) {
     }
 
     set_phase(context, None);
+    let job_count = context.state().jobs.len();
+    for index in 0..job_count {
+        JobRunner::new(context.clone(), index)
+            .restore_pending_entries()
+            .await;
+    }
     finalize_states(&mut context.state().jobs);
 }
 

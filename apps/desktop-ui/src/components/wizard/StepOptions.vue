@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { ExecutionMode, StepName } from "@/api/types";
-import { allBumps, allSteps, forceSteps, fullSteps, simpleSteps } from "@/api/types";
+import { allBumps, allBumpWhens, allSteps, forceSteps, fullSteps, simpleSteps } from "@/api/types";
 import { orderedSteps, parseArguments } from "@/lib/wizard-plan";
 import { useWizardStore } from "@/stores/wizard";
 
@@ -105,11 +105,25 @@ function toggleFlag(flag: string): void {
           </div>
           <span class="hint muted">{{ t("options.bump.hint") }}</span>
         </div>
-        <label class="switch">
-          <input v-model="wizard.draft.bumpOnlyIfSameAsMain" type="checkbox" />
-          <span>{{ t("options.bump.onlyIfSameAsMain") }}</span>
-        </label>
-        <span class="hint muted">{{ t("options.bump.onlyIfSameAsMainHint") }}</span>
+        <div class="field">
+          <label>{{ t("options.bump.whenTitle") }}</label>
+          <div class="stack modes">
+            <label
+              v-for="when in allBumpWhens"
+              :key="when"
+              class="mode"
+              :class="{ active: wizard.draft.bumpWhen === when }"
+            >
+              <span class="check">
+                <input v-model="wizard.draft.bumpWhen" type="radio" name="bump-when" :value="when" />
+              </span>
+              <span class="step-text">
+                <span class="step-title">{{ t(`options.bump.when.${when}.title`) }}</span>
+                <span class="muted">{{ t(`options.bump.when.${when}.hint`) }}</span>
+              </span>
+            </label>
+          </div>
+        </div>
       </div>
     </section>
 

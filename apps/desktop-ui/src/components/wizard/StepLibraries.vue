@@ -6,6 +6,7 @@ import VersionPicker from "./VersionPicker.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import NoticeBanner from "@/components/ui/NoticeBanner.vue";
 import { useCountedNoun } from "@/composables/useCountedNoun";
+import { groupChoicesBySection, otherSections, sectionField } from "@/lib/dependency-sections";
 import { formatSpec } from "@/lib/versions";
 import type { PackageChoice } from "@/lib/wizard-plan";
 import { useWizardStore } from "@/stores/wizard";
@@ -29,6 +30,8 @@ const visible = computed(() => {
     return !needle || choice.name.toLowerCase().includes(needle);
   });
 });
+
+const grouped = computed(() => groupChoicesBySection(visible.value));
 
 const selectedCount = computed(() => wizard.draft.choices.filter((choice) => choice.selected).length);
 const localCount = computed(() => wizard.draft.choices.filter((choice) => choice.localVersion).length);
@@ -94,27 +97,43 @@ onMounted(() => {
     </NoticeBanner>
 
     <div v-if="!wizard.inspecting && wizard.draft.choices.length" class="list">
-      <div v-for="choice in visible" :key="choice.name" class="entry" :class="{ selected: choice.selected }">
-        <label class="list-row candidate">
-          <span class="check">
-            <input type="checkbox" :checked="choice.selected" @change="patch(choice, { selected: !choice.selected })" />
-          </span>
-          <span class="details">
-            <span class="row">
-              <span class="name mono">{{ choice.name }}</span>
-              <span v-if="choice.localVersion" class="badge badge-accent mono">{{
-                t("libraries.local", { version: choice.localVersion })
-              }}</span>
-              <span v-if="choice.localBranch" class="badge badge-violet mono" :title="choice.localBranch">
-                {{ t("libraries.branch", { branch: choice.branchSuffix ?? choice.localBranch }) }}
-              </span>
-              <span v-if="choice.saveDev" class="badge">{{ t("libraries.dev") }}</span>
+      <template v-for="group in grouped" :key="group.section">
+        <div class="group-head">
+          <span class="mono">{{ group.field }}</span>
+          <span class="count">{{ group.items.length }}</span>
+        </div>
+        <div v-for="choice in group.items" :key="choice.name" class="entry" :class="{ selected: choice.selected }">
+          <label class="list-row candidate">
+            <span class="check">
+              <input
+                type="checkbox"
+                :checked="choice.selected"
+                @change="patch(choice, { selected: !choice.selected })"
+              />
             </span>
-            <span class="muted usage" :title="choice.usedBy.join(', ')">{{ usage(choice) }}</span>
-          </span>
-        </label>
-        <VersionPicker v-if="choice.selected" :choice="choice" @patch="patch(choice, $event)" />
-      </div>
+            <span class="details">
+              <span class="row">
+                <span class="name mono">{{ choice.name }}</span>
+                <span v-if="choice.localVersion" class="badge badge-accent mono">{{
+                  t("libraries.local", { version: choice.localVersion })
+                }}</span>
+                <span v-if="choice.localBranch" class="badge badge-violet mono" :title="choice.localBranch">
+                  {{ t("libraries.branch", { branch: choice.branchSuffix ?? choice.localBranch }) }}
+                </span>
+                <span
+                  v-for="section in otherSections(choice.sections)"
+                  :key="section"
+                  class="badge"
+                  :title="t('libraries.alsoIn', { field: sectionField[section] })"
+                  >{{ t(`libraries.sectionBadge.${section}`) }}</span
+                >
+              </span>
+              <span class="muted usage" :title="choice.usedBy.join(', ')">{{ usage(choice) }}</span>
+            </span>
+          </label>
+          <VersionPicker v-if="choice.selected" :choice="choice" @patch="patch(choice, $event)" />
+        </div>
+      </template>
       <p v-if="!visible.length" class="list-row muted">{{ t("libraries.noMatch") }}</p>
     </div>
 

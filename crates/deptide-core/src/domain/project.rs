@@ -108,5 +108,7 @@ pub struct DetectedProject {
     pub kind: ProjectKind,
     pub dependencies: BTreeMap<String, String>,
     pub dev_dependencies: BTreeMap<String, String>,
+    #[serde(default)]
+    pub peer_dependencies: BTreeMap<String, String>,
     pub has_build_script: bool,
 }

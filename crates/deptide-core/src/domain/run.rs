@@ -69,14 +69,47 @@ impl VersionBump {
     }
 }
 
+/// When the `version` step bumps a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BumpWhen {
+    #[default]
+    Always,
+    /// Only while the version still equals the one on the main branch.
+    SameAsMain,
+    /// Only while the current branch's own commits have not changed the version.
+    NotBumpedOnBranch,
+}
+
 /// How the `version` step treats each project's `package.json` version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", from = "StoredVersionPolicy")]
 pub struct VersionPolicy {
     pub bump: VersionBump,
-    /// Only bump when the version still equals the one on the main branch,
-    /// so a project that was already raised on this branch is left alone.
-    pub only_if_same_as_main: bool,
+    pub when: BumpWhen,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct StoredVersionPolicy {
+    bump: VersionBump,
+    when: Option<BumpWhen>,
+    only_if_same_as_main: bool,
+}
+
+impl From<StoredVersionPolicy> for VersionPolicy {
+    fn from(stored: StoredVersionPolicy) -> Self {
+        let legacy = if stored.only_if_same_as_main {
+            BumpWhen::SameAsMain
+        } else {
+            BumpWhen::Always
+        };
+
+        Self {
+            bump: stored.bump,
+            when: stored.when.unwrap_or(legacy),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

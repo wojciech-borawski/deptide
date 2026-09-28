@@ -39,6 +39,7 @@ describe("parseSpec", () => {
       name: "@acme/core",
       version: "3.1.0-ABC-1",
       saveDev: false,
+      savePeer: false,
     });
   });
 

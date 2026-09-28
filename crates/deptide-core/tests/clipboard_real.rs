@@ -25,7 +25,7 @@ fn staged_folders_round_trip_through_the_clipboard() {
     };
     save_config(&workspace, &config).unwrap();
 
-    let result = copy_to_clipboard(&workspace, &config, &["web".to_string()], &[]).unwrap();
+    let result = copy_to_clipboard(&workspace, &config, &["web".to_string()], &[], &[]).unwrap();
     assert_eq!(result.projects[0].files, 3);
     let staged = result.projects[0].staged_path.clone().unwrap();
     assert!(std::path::Path::new(&staged).join("src/index.ts").exists());

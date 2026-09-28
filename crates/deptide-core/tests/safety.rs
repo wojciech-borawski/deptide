@@ -106,6 +106,7 @@ fn branch_is_read_from_the_git_head_and_the_suffix_extracted() {
         kind: deptide_core::domain::ProjectKind::Application,
         dependencies: BTreeMap::from([("@acme/core".to_string(), "^3.0.0".to_string())]),
         dev_dependencies: BTreeMap::new(),
+        peer_dependencies: BTreeMap::new(),
         has_build_script: false,
     };
 

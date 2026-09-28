@@ -36,7 +36,16 @@ describe("translations", () => {
   });
 
   it("keeps plural forms for the nouns that are pluralised", () => {
-    for (const key of ["common.project", "common.package", "common.library", "common.dependency", "common.line"]) {
+    for (const key of [
+      "common.project",
+      "common.package",
+      "common.library",
+      "common.dependency",
+      "common.line",
+      "transfer.filePreview.unchangedLines",
+      "transfer.rejected",
+      "transfer.entryFiles",
+    ]) {
       expect(read(en, key).split("|").length).toBe(2);
       expect(read(de, key).split("|").length).toBe(2);
       expect(read(pl, key).split("|").length).toBe(3);

@@ -1,4 +1,4 @@
-use deptide_core::domain::{PackageSpec, RunPlan, StepName, VersionPolicy};
+use deptide_core::domain::{PackageSpec, RunPlan, Settings, StepName, UpdateConfig, VersionPolicy};
 use deptide_core::error::{AppError, AppResult};
 use deptide_core::execution::{
     build_jobs, collect_package_specs, collect_steps, prune_backups, RunOptions,
@@ -44,28 +44,26 @@ fn log_header(
     header
 }
 
-pub async fn execute(args: RunArgs) -> AppResult<ExitCode> {
-    let (workspace, config) = open_with_config(&args.workspace)?;
-    let settings = load_settings(&workspace);
-
+fn build_plan(args: &RunArgs, config: &UpdateConfig, settings: &Settings) -> AppResult<RunPlan> {
     let packages = args
         .packages
         .iter()
         .map(|spec| parse_package(spec))
         .collect::<AppResult<Vec<_>>>()?;
 
-    let plan = RunPlan {
+    Ok(RunPlan {
         project_names: default_project_names(&config.projects, &args.projects),
         packages,
         steps: args
             .steps
-            .map(|steps| steps.into_iter().map(StepName::from).collect())
+            .as_ref()
+            .map(|steps| steps.iter().copied().map(StepName::from).collect())
             .unwrap_or_else(|| settings.steps.clone()),
         mode: args.mode.map(Into::into).unwrap_or(settings.mode),
         concurrency: args.concurrency.unwrap_or(settings.concurrency).max(1),
         dry_run: args.dry_run,
-        extra_install_args: args.install_args,
-        label: args.label.unwrap_or_else(|| {
+        extra_install_args: args.install_args.clone(),
+        label: args.label.clone().unwrap_or_else(|| {
             args.packages
                 .iter()
                 .map(|spec| spec.split('@').next().unwrap_or(spec).to_string())
@@ -75,9 +73,15 @@ pub async fn execute(args: RunArgs) -> AppResult<ExitCode> {
         save_as: None,
         version: VersionPolicy {
             bump: args.bump.into(),
-            only_if_same_as_main: args.bump_only_if_same_as_main,
+            when: args.bump_when(),
         },
-    };
+    })
+}
+
+pub async fn execute(args: RunArgs) -> AppResult<ExitCode> {
+    let (workspace, config) = open_with_config(&args.workspace)?;
+    let settings = load_settings(&workspace);
+    let plan = build_plan(&args, &config, &settings)?;
 
     let outcome = build_jobs(&workspace, &config, &plan);
     for name in &outcome.missing {
@@ -124,4 +128,62 @@ pub async fn execute(args: RunArgs) -> AppResult<ExitCode> {
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use deptide_core::domain::{BumpWhen, Settings, UpdateConfig, VersionBump, VersionPolicy};
+
+    use super::build_plan;
+    use crate::arguments::{Cli, Command};
+
+    fn plan_version(flags: &[&str]) -> VersionPolicy {
+        let mut args = vec!["deptide-cli", "run", "workspace", "-p", "left-pad@1.3.0"];
+        args.extend_from_slice(flags);
+        let Command::Run(run) = Cli::try_parse_from(args).unwrap().command else {
+            panic!("expected the run command");
+        };
+        build_plan(&run, &UpdateConfig::default(), &Settings::default())
+            .unwrap()
+            .version
+    }
+
+    #[test]
+    fn the_plan_carries_the_bump_and_the_bump_condition() {
+        let cases: [(&[&str], VersionPolicy); 4] = [
+            (
+                &[],
+                VersionPolicy {
+                    bump: VersionBump::Patch,
+                    when: BumpWhen::Always,
+                },
+            ),
+            (
+                &["--bump", "minor", "--bump-when", "not-bumped-on-branch"],
+                VersionPolicy {
+                    bump: VersionBump::Minor,
+                    when: BumpWhen::NotBumpedOnBranch,
+                },
+            ),
+            (
+                &["--bump-when", "same-as-main"],
+                VersionPolicy {
+                    bump: VersionBump::Patch,
+                    when: BumpWhen::SameAsMain,
+                },
+            ),
+            (
+                &["--bump", "major", "--bump-only-if-same-as-main"],
+                VersionPolicy {
+                    bump: VersionBump::Major,
+                    when: BumpWhen::SameAsMain,
+                },
+            ),
+        ];
+
+        for (flags, expected) in cases {
+            assert_eq!(plan_version(flags), expected, "{flags:?}");
+        }
+    }
 }
