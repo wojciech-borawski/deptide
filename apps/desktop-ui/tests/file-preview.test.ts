@@ -4,7 +4,7 @@ import { createPinia, setActivePinia, type Pinia } from "pinia";
 
 import type { FileSide, FileStatus, ReceiveFileContents } from "@/api/types";
 
-const backend = vi.hoisted(() => ({ readReceiveFile: vi.fn() }));
+const backend = vi.hoisted(() => ({ readReceiveFile: vi.fn(), applyReceive: vi.fn() }));
 
 vi.mock("@/api/commands", () => ({ ...backend, reportError: () => undefined }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -42,8 +42,8 @@ function install(app: App<TestNode>): void {
   app.directive("ripple", {});
 }
 
-function side(text: string): FileSide {
-  return { kind: "text", text, bom: false, size: text.length };
+function side(text: string, sha256 = `sha of ${text}`, utf8 = true): FileSide {
+  return { kind: "text", text, bom: false, size: text.length, sha256, utf8 };
 }
 
 function numbered(count: number, prefix = "line"): string[] {
@@ -78,6 +78,7 @@ function codeHtml(): string {
 
 beforeEach(() => {
   backend.readReceiveFile.mockReset();
+  backend.applyReceive.mockReset();
   pinia = createPinia();
   setActivePinia(pinia);
   i18n.global.locale.value = "en";
@@ -143,7 +144,7 @@ describe("FilePreview limits", () => {
     click(button("Show diff anyway"));
     await nextTick();
 
-    expect(findAll(root(), "tr")).toHaveLength(rowLimit + 11);
+    expect(findAll(root(), "tr").filter((row) => row.props.class !== "chunk-row")).toHaveLength(rowLimit + 11);
   });
 
   it("highlights a small file without a note", async () => {
@@ -196,5 +197,246 @@ describe("ReceiveProjectTab preview", () => {
 
     expect(transfer.previewFor(source)).toBeNull();
     expect(focused()?.props.role).toBe("tree");
+  });
+
+  it("saves the divider position from the keyboard and from a drag", async () => {
+    const project = makeProject(source, "web", [file("a.txt", "added")]);
+    backend.readReceiveFile.mockResolvedValue({ local: null, received: side("hello\n") });
+    const ui = useUiStore();
+    ui.receiveSplit = 32;
+    ui.receiveLayout = "tree";
+    useTransferStore().setPreview(source, "a.txt");
+    mounted = mount(ReceiveProjectTab, install, { project });
+    await vi.waitFor(() => expect(findAll(root(), "section")).toHaveLength(1));
+    const all = (node: TestNode): TestNode[] => [node, ...node.children.flatMap(all)];
+    const grip = all(root()).find((node) => node.props.role === "separator");
+    const pane = all(root()).find((node) =>
+      String(node.props.class ?? "")
+        .split(" ")
+        .includes("split"),
+    );
+    if (!grip || !pane) throw new Error("no divider");
+    Object.assign(pane, { getBoundingClientRect: () => ({ left: 0, width: 1200 }) });
+    Object.assign(grip, { setPointerCapture: vi.fn() });
+
+    dispatch(grip, "keydown", { key: "ArrowRight" });
+    expect(ui.receiveSplit).toBe(34);
+
+    dispatch(grip, "pointerdown", { button: 0, pointerId: 1, clientX: 400 });
+    dispatch(grip, "pointermove", { pointerId: 1, clientX: 607 });
+    expect(ui.receiveSplit).toBe(50);
+  });
+});
+
+describe("FilePreview chunks", () => {
+  const before = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n";
+  const after = "a\nB\nc\nd\ne\nf\ng\nh\nI\nj\n";
+
+  function pills(): TestNode[] {
+    return findAll(root(), "button").filter((node) => String(node.props.class ?? "").includes("chunk-pill"));
+  }
+
+  function pillStates(): string[] {
+    const shown = pills();
+    return shown.map((node, index) => {
+      const label = textOf(node).trim();
+      expect(node.props["aria-pressed"]).toBeUndefined();
+      expect(node.props["aria-label"]).toBe(`Chunk ${index + 1} of ${shown.length}: ${label}`);
+      return label;
+    });
+  }
+
+  function switchInput(): TestNode {
+    const found = findAll(root(), "input").find((node) => node.props.type === "checkbox");
+    if (!found) throw new Error("no switch");
+    return found;
+  }
+
+  async function shown(relative: string, status: FileStatus, contents: ReceiveFileContents): Promise<void> {
+    const project = makeProject(source, "web", [file(relative, status)]);
+    const transfer = useTransferStore();
+    transfer.plan = { projects: [project] };
+    transfer.setFiles(source, [relative], status === "replaced");
+    showPreview(relative, status, contents);
+    await vi.waitFor(() => expect(textOf(root())).not.toContain("Loading"));
+  }
+
+  it("puts a Take pill on each chunk of a replaced file and keeps one when it is clicked", async () => {
+    await shown("a.txt", "replaced", { local: side(before, "L"), received: side(after, "R") });
+    const transfer = useTransferStore();
+
+    expect(pillStates()).toEqual(["Take", "Take"]);
+
+    click(pills()[1] as TestNode);
+    await nextTick();
+
+    expect(pillStates()).toEqual(["Take", "Keep mine"]);
+    expect(transfer.fileState(source, "a.txt")).toBe("indeterminate");
+    expect(transfer.chunkChoiceFor(source, "a.txt")).toMatchObject({
+      receivedSha256: "R",
+      localSha256: "L",
+      chunks: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1 },
+        { oldStart: 8, oldCount: 1, newStart: 8, newCount: 1 },
+      ],
+    });
+  });
+
+  it("ignores a choice made on other file contents after the file is read again", async () => {
+    await shown("a.txt", "replaced", { local: side(before, "L1"), received: side(after, "R1") });
+    const transfer = useTransferStore();
+    click(pills()[1] as TestNode);
+    await nextTick();
+    expect([...(transfer.chunkChoiceFor(source, "a.txt")?.taken ?? [])]).toEqual([0]);
+    mounted?.unmount();
+
+    for (let index = 0; index < 20; index += 1) await transfer.readFile("C:\\workspace", source, `other${index}.txt`);
+    const changed = "A\nb\nc\nD\ne\nf\ng\nh\ni\nJ\n";
+    showPreview("a.txt", "replaced", { local: side(before, "L1"), received: side(changed, "R2") });
+    await vi.waitFor(() => expect(pills()).toHaveLength(3));
+    expect(pillStates()).toEqual(["Take", "Take", "Take"]);
+
+    click(pills()[2] as TestNode);
+    await nextTick();
+    expect(pillStates()).toEqual(["Take", "Take", "Keep mine"]);
+
+    backend.applyReceive.mockResolvedValue({ projects: [], files: 0, bytes: 0, receivedAt: "", logFile: null });
+    await transfer.apply("C:\\workspace", source);
+    expect(backend.applyReceive.mock.calls[0]?.[1]?.[0]?.merges).toEqual([
+      {
+        relative: "a.txt",
+        receivedSha256: "R2",
+        localSha256: "L1",
+        total: 3,
+        chunks: [
+          { oldStart: 0, oldCount: 1, newStart: 0, newCount: 1 },
+          { oldStart: 3, oldCount: 1, newStart: 3, newCount: 1 },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps and takes every chunk with Keep all and Take all", async () => {
+    await shown("a.txt", "replaced", { local: side(before), received: side(after) });
+    const transfer = useTransferStore();
+
+    click(button("Keep all"));
+    await nextTick();
+    expect(pillStates()).toEqual(["Keep mine", "Keep mine"]);
+    expect(transfer.fileState(source, "a.txt")).toBe("unchecked");
+
+    click(button("Take all"));
+    await nextTick();
+    expect(pillStates()).toEqual(["Take", "Take"]);
+    expect(transfer.fileState(source, "a.txt")).toBe("checked");
+  });
+
+  it("moves focus between chunk pills with n and p", async () => {
+    await shown("a.txt", "replaced", { local: side(before), received: side(after) });
+    const section = findAll(root(), "section")[0] as TestNode;
+
+    dispatch(section, "keydown", { key: "n" });
+    expect(focused()).toBe(pills()[0]);
+    dispatch(focused() as TestNode, "keydown", { key: "n" });
+    expect(focused()).toBe(pills()[1]);
+    dispatch(focused() as TestNode, "keydown", { key: "n" });
+    expect(focused()).toBe(pills()[1]);
+    dispatch(focused() as TestNode, "keydown", { key: "p" });
+    expect(focused()).toBe(pills()[0]);
+  });
+
+  it("offers only the whole file, with a note, when a side is not valid UTF-8", async () => {
+    await shown("a.txt", "replaced", { local: side(before, "L", false), received: side(after) });
+
+    expect(pills()).toHaveLength(0);
+    expect(buttonLabelled(root(), "Take all")).toBeUndefined();
+    expect(textOf(root())).toContain("not valid UTF-8");
+  });
+
+  it("offers only the whole file, with a note, for a binary file", async () => {
+    await shown("a.bin", "replaced", {
+      local: { kind: "binary", size: 10 },
+      received: { kind: "binary", size: 12 },
+    });
+
+    expect(pills()).toHaveLength(0);
+    expect(textOf(root())).toContain("Binary files are received whole");
+  });
+
+  it("has no pills for a new file", async () => {
+    await shown("a.txt", "added", { local: null, received: side(after) });
+
+    expect(pills()).toHaveLength(0);
+    expect(textOf(root())).not.toContain("received whole");
+  });
+
+  it("hides whitespace-only chunks with their pills and keeps them when whitespace changes are hidden", async () => {
+    const local = "a\nb c\nd\ne\nf\ng\nh\ni\n";
+    const received = "a\nb  c\nd\ne\nf\ng\nH\ni\n";
+    await shown("a.txt", "replaced", { local: side(local), received: side(received) });
+    const transfer = useTransferStore();
+    expect(pillStates()).toEqual(["Take", "Take"]);
+
+    dispatch(switchInput(), "change", { target: { checked: true } });
+    await nextTick();
+
+    expect(pillStates()).toEqual(["Take"]);
+    expect([...(transfer.chunkChoiceFor(source, "a.txt")?.taken ?? [])]).toEqual([1]);
+
+    dispatch(switchInput(), "change", { target: { checked: false } });
+    await nextTick();
+
+    expect(pillStates()).toEqual(["Keep mine", "Take"]);
+  });
+
+  it("shows Mixed on a pill over a taken and a kept chunk while whitespace is hidden, and takes both on click", async () => {
+    await shown("a.txt", "replaced", { local: side("a\n"), received: side("b\na\nb\na \n") });
+    const transfer = useTransferStore();
+    expect(pillStates()).toEqual(["Take", "Take"]);
+    click(pills()[1] as TestNode);
+    await nextTick();
+    expect(pillStates()).toEqual(["Take", "Keep mine"]);
+
+    dispatch(switchInput(), "change", { target: { checked: true } });
+    await nextTick();
+    expect(pillStates()).toEqual(["Mixed"]);
+    expect([...(transfer.chunkChoiceFor(source, "a.txt")?.taken ?? [])]).toEqual([0]);
+
+    click(pills()[0] as TestNode);
+    await nextTick();
+
+    expect(pillStates()).toEqual(["Take"]);
+    expect(transfer.fileState(source, "a.txt")).toBe("checked");
+    expect(transfer.chunkChoiceFor(source, "a.txt")).toBeNull();
+  });
+
+  it("offers only the whole file, with a note, when the exact diff gave up", async () => {
+    const before = numbered(1200);
+    const after = before.map((line, index) => (index % 2 === 0 ? `${line} changed` : line));
+    await shown("a.txt", "replaced", { local: side(text(before)), received: side(text(after)) });
+
+    expect(pills()).toHaveLength(0);
+    expect(buttonLabelled(root(), "Take all")).toBeUndefined();
+    expect(textOf(root())).toContain("Too many changes to pick them one by one");
+  });
+
+  it("takes a whitespace-only file whole with Take all while whitespace is hidden", async () => {
+    await shown("a.txt", "whitespace", { local: side("a\nb c\n"), received: side("a\nb  c\n") });
+
+    click(button("Take all"));
+    await nextTick();
+
+    expect(useTransferStore().fileState(source, "a.txt")).toBe("checked");
+  });
+
+  it("opens a whitespace-only file with whitespace hidden and no pills", async () => {
+    await shown("a.txt", "whitespace", { local: side("a\nb c\n"), received: side("a\nb  c\n") });
+
+    expect(pills()).toHaveLength(0);
+
+    dispatch(switchInput(), "change", { target: { checked: false } });
+    await nextTick();
+
+    expect(pillStates()).toEqual(["Keep mine"]);
   });
 });

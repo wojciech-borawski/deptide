@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from "vue";
+import { computed, ref, shallowRef, watch, type ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 
-import type { FileSide, ReceiveFile, ReceiveFileContents } from "@/api/types";
+import type { FileSide, FileStatus, ReceiveFile, ReceiveFileContents } from "@/api/types";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import NoticeBanner from "@/components/ui/NoticeBanner.vue";
 import { describeError } from "@/composables/useAsyncAction";
 import {
+  changeRuns,
+  chunksOf,
+  chunksOverlapping,
   diffTexts,
   hasChanges,
   languageFor,
+  lineDiff,
   rowCount,
   splitLines,
   splitRows,
@@ -26,9 +30,10 @@ import {
 import { formatBytes } from "@/lib/format";
 import { statusTones } from "@/lib/receive-view";
 import { highlightLanguage, highlightLines, lineHtml, type Token } from "@/lib/syntax";
-import { useTransferStore } from "@/stores/transfer";
+import { useTransferStore, type ChunkFile } from "@/stores/transfer";
 import { useUiStore, type DiffMode } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
+import ChunkPill, { type PillState } from "./ChunkPill.vue";
 
 const props = defineProps<{ source: string; file: ReceiveFile }>();
 const emit = defineEmits<{ close: [] }>();
@@ -41,7 +46,17 @@ type TextSide = Extract<FileSide, { kind: "text" }>;
 
 type Which = "old" | "new";
 
-type UnifiedView = Gap | { kind: "line"; line: DiffLine; side: LineSide; which: Which };
+type UnifiedView = Gap | { kind: "line"; line: DiffLine; side: LineSide; which: Which; block: number | undefined };
+
+type SplitView = Gap | { kind: "pair"; left: SplitCell | null; right: SplitCell | null; block: number | undefined };
+
+interface PillBlock {
+  /** Indexes of the exact chunks this visible change covers. */
+  members: number[];
+  start: LineSide;
+}
+
+const chunkStatuses: ReadonlySet<FileStatus> = new Set(["replaced", "whitespace"]);
 
 const modes: { mode: DiffMode; label: string }[] = [
   { mode: "unified", label: "transfer.filePreview.unified" },
@@ -107,9 +122,15 @@ const blocked = computed((): string | null => {
   return null;
 });
 
+const exact = computed(() => {
+  if (blocked.value !== null || !isDiff.value || !oldText.value || !newText.value) return null;
+  return lineDiff(oldText.value.text, newText.value.text);
+});
+
 const lines = computed((): DiffLine[] => {
   if (blocked.value !== null) return [];
   if (isDiff.value && oldText.value && newText.value) {
+    if (!hideWhitespace.value && exact.value) return exact.value.lines;
     return diffTexts(oldText.value.text, newText.value.text, { ignoreWhitespace: hideWhitespace.value });
   }
   if (newText.value && !oldText.value) return wholeFile(newText.value.text, "added");
@@ -140,12 +161,112 @@ const unified = computed((): UnifiedView[] => {
   return unifiedRows(lines.value, shown.value).flatMap((row): UnifiedView[] => {
     if (row.kind === "gap") return [row];
     const { line } = row;
-    if (line.new) return [{ kind: "line", line, side: line.new, which: "new" }];
-    return line.old ? [{ kind: "line", line, side: line.old, which: "old" }] : [];
+    if (line.new) return [{ kind: "line", line, side: line.new, which: "new", block: blockFor(line.new) }];
+    return line.old ? [{ kind: "line", line, side: line.old, which: "old", block: blockFor(line.old) }] : [];
   });
 });
-const split = computed(() => (mode.value === "split" && !large.value ? splitRows(lines.value, shown.value) : []));
+const split = computed((): SplitView[] => {
+  if (mode.value !== "split" || large.value) return [];
+  return splitRows(lines.value, shown.value).map((row) =>
+    row.kind === "gap" ? row : { ...row, block: blockFor(row.left?.side, row.right?.side) },
+  );
+});
 const unchanged = computed(() => isDiff.value && !hasChanges(lines.value));
+
+const pickable = computed(() => chunkStatuses.has(props.file.status));
+
+const wholeNote = computed((): string | null => {
+  if (!pickable.value || !contents.value) return null;
+  const sides = [local.value, received.value];
+  if (sides.some((side) => side?.kind === "binary")) return t("transfer.filePreview.wholeBinary");
+  if (sides.some((side) => side?.kind === "tooLarge")) return t("transfer.filePreview.wholeTooLarge");
+  if (!oldText.value || !newText.value) return null;
+  if (!oldText.value.utf8 || !newText.value.utf8) return t("transfer.filePreview.wholeEncoding");
+  return exact.value?.gaveUp ? t("transfer.filePreview.wholeGaveUp") : null;
+});
+
+const chunkFile = computed((): ChunkFile | null => {
+  if (!pickable.value || wholeNote.value !== null || !exact.value || !oldText.value || !newText.value) return null;
+  const chunks = chunksOf(exact.value.lines);
+  if (!chunks.length) return null;
+  return { receivedSha256: newText.value.sha256, localSha256: oldText.value.sha256, chunks };
+});
+
+const pillBlocks = computed((): PillBlock[] => {
+  const file = chunkFile.value;
+  if (!file) return [];
+  return changeRuns(lines.value).flatMap((run) => {
+    const members = chunksOverlapping(run.chunk, file.chunks);
+    const start = run.first.old ?? run.first.new;
+    return members.length && start ? [{ members, start }] : [];
+  });
+});
+
+const blockAt = computed(() => new Map(pillBlocks.value.map((block, index) => [block.start, index])));
+
+const hiddenChunks = computed((): number[] => {
+  const file = chunkFile.value;
+  if (!file) return [];
+  const shown = new Set(pillBlocks.value.flatMap((block) => block.members));
+  return file.chunks.flatMap((_chunk, index) => (shown.has(index) ? [] : [index]));
+});
+
+const pills: (HTMLElement | null)[] = [];
+
+function pillRef(index: number, element: Element | ComponentPublicInstance | null): void {
+  pills[index] = element && "$el" in element ? (element.$el as HTMLElement) : null;
+}
+
+function blockFor(...sides: (LineSide | undefined)[]): number | undefined {
+  for (const side of sides) {
+    const index = side ? blockAt.value.get(side) : undefined;
+    if (index !== undefined) return index;
+  }
+  return undefined;
+}
+
+function pillState(index: number): PillState {
+  const file = chunkFile.value;
+  const members = pillBlocks.value[index]?.members ?? [];
+  if (!file) return "keep";
+  const taken = members.filter((chunk) => transfer.isChunkTaken(props.source, props.file.relative, chunk, file)).length;
+  if (taken === 0) return "keep";
+  return taken === members.length ? "take" : "mixed";
+}
+
+function setChunks(indexes: readonly number[], take: boolean): void {
+  if (chunkFile.value) transfer.setChunks(props.source, props.file.relative, chunkFile.value, indexes, take);
+}
+
+function togglePill(index: number): void {
+  setChunks(pillBlocks.value[index]?.members ?? [], pillState(index) !== "take");
+}
+
+function setAll(take: boolean): void {
+  setChunks(chunkFile.value?.chunks.map((_chunk, index) => index) ?? [], take);
+}
+
+function setHideWhitespace(on: boolean): void {
+  hideWhitespace.value = on;
+  if (on && hiddenChunks.value.length) setChunks(hiddenChunks.value, false);
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    emit("close");
+    return;
+  }
+  if ((event.key !== "n" && event.key !== "p") || event.ctrlKey || event.metaKey || event.altKey) return;
+  const shown = pills.filter((pill): pill is HTMLElement => pill !== null);
+  if (!shown.length) return;
+  event.preventDefault();
+  const current = shown.indexOf(document.activeElement as HTMLElement);
+  const step = event.key === "n" ? 1 : -1;
+  const next =
+    current === -1 ? (step === 1 ? 0 : shown.length - 1) : Math.min(shown.length - 1, Math.max(0, current + step));
+  shown[next]?.focus();
+  shown[next]?.scrollIntoView({ block: "nearest" });
+}
 
 const bomNote = computed(() => {
   if (!oldText.value || !newText.value || oldText.value.bom === newText.value.bom) return null;
@@ -187,7 +308,7 @@ function splitKey(left: SplitCell | null, right: SplitCell | null): string {
 </script>
 
 <template>
-  <section ref="section" class="preview" tabindex="-1" :aria-label="props.file.relative" @keydown.esc="emit('close')">
+  <section ref="section" class="preview" tabindex="-1" :aria-label="props.file.relative" @keydown="onKeydown">
     <header class="head">
       <div class="title">
         <span class="mono truncate selectable path" :title="props.file.relative">{{ props.file.relative }}</span>
@@ -221,10 +342,20 @@ function splitKey(left: SplitCell | null, right: SplitCell | null): string {
           </button>
         </span>
         <label class="switch small">
-          <input v-model="hideWhitespace" type="checkbox" />
+          <input
+            :checked="hideWhitespace"
+            type="checkbox"
+            @change="setHideWhitespace(($event.target as HTMLInputElement).checked)"
+          />
           {{ t("transfer.filePreview.hideWhitespace") }}
         </label>
+        <template v-if="chunkFile">
+          <span class="spacer" />
+          <button class="chip" type="button" @click="setAll(true)">{{ t("transfer.filePreview.takeAll") }}</button>
+          <button class="chip" type="button" @click="setAll(false)">{{ t("transfer.filePreview.keepAll") }}</button>
+        </template>
       </div>
+      <p v-if="wholeNote" class="muted small note">{{ wholeNote }}</p>
       <p v-if="bomNote" class="muted small note">{{ bomNote }}</p>
       <p v-if="highlightOff && !blocked" class="muted small note">{{ t("transfer.filePreview.highlightOff") }}</p>
     </header>
@@ -262,7 +393,18 @@ function splitKey(left: SplitCell | null, right: SplitCell | null): string {
                   </button>
                 </td>
               </tr>
-              <tr v-else :class="row.line.kind">
+              <tr v-else-if="row.block !== undefined" class="chunk-row">
+                <td colspan="4">
+                  <ChunkPill
+                    :ref="(element) => pillRef(row.block ?? 0, element)"
+                    :state="pillState(row.block)"
+                    :index="row.block"
+                    :total="pillBlocks.length"
+                    @toggle="togglePill(row.block ?? 0)"
+                  />
+                </td>
+              </tr>
+              <tr v-if="row.kind === 'line'" :class="row.line.kind">
                 <td class="num">{{ row.line.old?.number }}</td>
                 <td class="num">{{ row.line.new?.number }}</td>
                 <td class="sign">{{ signs[row.line.kind] }}</td>
@@ -303,7 +445,18 @@ function splitKey(left: SplitCell | null, right: SplitCell | null): string {
                   </button>
                 </td>
               </tr>
-              <tr v-else>
+              <tr v-else-if="row.block !== undefined" class="chunk-row">
+                <td colspan="4">
+                  <ChunkPill
+                    :ref="(element) => pillRef(row.block ?? 0, element)"
+                    :state="pillState(row.block)"
+                    :index="row.block"
+                    :total="pillBlocks.length"
+                    @toggle="togglePill(row.block ?? 0)"
+                  />
+                </td>
+              </tr>
+              <tr v-if="row.kind === 'pair'">
                 <template v-for="(cell, index) in [row.left, row.right]" :key="index">
                   <td class="num" :class="cell ? cell.kind : 'empty'">{{ cell?.side.number }}</td>
                   <td class="code" :class="cell ? cell.kind : 'empty'">
@@ -501,6 +654,10 @@ function splitKey(left: SplitCell | null, right: SplitCell | null): string {
   color: var(--text-muted);
   background: var(--bg-hover);
   user-select: none;
+}
+
+.diff .chunk-row td {
+  padding: 4px 8px 2px;
 }
 
 .gap td {

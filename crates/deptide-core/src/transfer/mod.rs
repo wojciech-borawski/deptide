@@ -1,6 +1,7 @@
 mod clipboard;
 mod files;
 mod journal;
+mod merge;
 mod preview;
 mod receive;
 mod receive_clipboard;
@@ -20,10 +21,12 @@ use staging::create_staging_directory;
 
 pub use clipboard::{clipboard_sequence, read_clipboard_files, ClipboardFiles};
 pub use files::{collect_files, copy_collection, same_content, Collection};
+pub use merge::{merge_lines, ChunkError, LineChunk};
 pub use preview::{read_file_pair, FileSide, ReceiveFileContents, PREVIEW_LIMIT};
 pub use receive::{
-    analyze, apply, is_project_folder, suggest_target, suggest_target_for, FileStatus,
-    KnownProject, ReceiveFile, ReceiveProjectPlan, ReceiveProjectResult, ReceiveSelection,
+    analyze, apply, is_project_folder, suggest_target, suggest_target_for, FileMerge, FileStatus,
+    KnownProject, MergedFile, ReceiveFile, ReceiveProjectPlan, ReceiveProjectResult,
+    ReceiveSelection,
 };
 pub use receive_clipboard::{
     ClipboardAccess, ClipboardDownload, DownloadedFolder, ReceiveClipboard, SystemClipboard,

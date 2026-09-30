@@ -1,5 +1,7 @@
 import { diffArrays, diffWordsWithSpace } from "diff";
 
+import type { LineChunk } from "@/api/types";
+
 export type Language = "typescript" | "javascript" | "json" | "css" | "scss" | "xml" | "markdown" | "yaml";
 
 export type LineEnding = "crlf" | "lf" | "cr" | "none";
@@ -49,6 +51,17 @@ export type DiffLayout = "unified" | "split";
 
 export interface DiffOptions {
   ignoreWhitespace?: boolean;
+}
+
+export interface LineDiff {
+  lines: DiffLine[];
+  /** True when the edit limit was passed and the changed middle is one removed plus one added block. */
+  gaveUp: boolean;
+}
+
+export interface ChangeRun {
+  chunk: LineChunk;
+  first: DiffLine;
 }
 
 export const contextLines = 3;
@@ -136,7 +149,7 @@ interface Block {
   newCount: number;
 }
 
-function diffBlocks(oldKeys: readonly string[], newKeys: readonly string[]): Block[] {
+function diffBlocks(oldKeys: readonly string[], newKeys: readonly string[]): { blocks: Block[]; gaveUp: boolean } {
   const { prefix, suffix } = sharedEdges(oldKeys, newKeys);
   const oldMiddle = oldKeys.slice(prefix, oldKeys.length - suffix);
   const newMiddle = newKeys.slice(prefix, newKeys.length - suffix);
@@ -158,7 +171,7 @@ function diffBlocks(oldKeys: readonly string[], newKeys: readonly string[]): Blo
   }
 
   blocks.push({ equal: true, oldCount: suffix, newCount: suffix });
-  return mergeBlocks(blocks);
+  return { blocks: mergeBlocks(blocks), gaveUp: !changes && oldMiddle.length > 0 && newMiddle.length > 0 };
 }
 
 function mergeBlocks(blocks: readonly Block[]): Block[] {
@@ -235,6 +248,10 @@ function pairChanges(removed: LineSide[], added: LineSide[], ignoreWhitespace: b
 }
 
 export function diffTexts(oldText: string, newText: string, options: DiffOptions = {}): DiffLine[] {
+  return lineDiff(oldText, newText, options).lines;
+}
+
+export function lineDiff(oldText: string, newText: string, options: DiffOptions = {}): LineDiff {
   const ignoreWhitespace = options.ignoreWhitespace ?? false;
   const oldLines = splitLines(oldText);
   const newLines = splitLines(newText);
@@ -242,8 +259,9 @@ export function diffTexts(oldText: string, newText: string, options: DiffOptions
   const lines: DiffLine[] = [];
   let oldIndex = 0;
   let newIndex = 0;
+  const { blocks, gaveUp } = diffBlocks(oldLines.map(key), newLines.map(key));
 
-  for (const block of diffBlocks(oldLines.map(key), newLines.map(key))) {
+  for (const block of blocks) {
     const removedLines = oldLines.slice(oldIndex, oldIndex + block.oldCount);
     const addedLines = newLines.slice(newIndex, newIndex + block.newCount);
 
@@ -271,7 +289,49 @@ export function diffTexts(oldText: string, newText: string, options: DiffOptions
     newIndex += block.newCount;
   }
 
-  return lines;
+  return { lines, gaveUp };
+}
+
+/** Each run of added and removed lines, with its 0-based line ranges and its first line. */
+export function changeRuns(lines: readonly DiffLine[]): ChangeRun[] {
+  const runs: ChangeRun[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  let current: ChangeRun | null = null;
+
+  for (const line of lines) {
+    if (line.kind === "context") {
+      current = null;
+    } else {
+      if (!current) {
+        current = { chunk: { oldStart: oldIndex, oldCount: 0, newStart: newIndex, newCount: 0 }, first: line };
+        runs.push(current);
+      }
+      if (line.old) current.chunk.oldCount += 1;
+      if (line.new) current.chunk.newCount += 1;
+    }
+    if (line.old) oldIndex += 1;
+    if (line.new) newIndex += 1;
+  }
+  return runs;
+}
+
+export function chunksOf(lines: readonly DiffLine[]): LineChunk[] {
+  return changeRuns(lines).map((run) => run.chunk);
+}
+
+function meets(start: number, count: number, otherStart: number, otherCount: number): boolean {
+  return count > 0 && otherCount > 0 && start < otherStart + otherCount && otherStart < start + count;
+}
+
+/** Indexes of `chunks` sharing an old or a new line with `block`. */
+export function chunksOverlapping(block: LineChunk, chunks: readonly LineChunk[]): number[] {
+  return chunks.flatMap((chunk, index) =>
+    meets(block.oldStart, block.oldCount, chunk.oldStart, chunk.oldCount) ||
+    meets(block.newStart, block.newCount, chunk.newStart, chunk.newCount)
+      ? [index]
+      : [],
+  );
 }
 
 export function hasChanges(lines: readonly DiffLine[]): boolean {

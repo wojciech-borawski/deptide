@@ -1,0 +1,15 @@
+{
+  "name": "CRLF file with a deleted line and an appended line",
+  "local": "one\r\ntwo\r\nthree\r\nfour\r\n",
+  "received": "one\r\nthree\r\nfour\r\nfive\r\n",
+  "chunks": [
+    { "oldStart": 1, "oldCount": 1, "newStart": 1, "newCount": 0 },
+    { "oldStart": 4, "oldCount": 0, "newStart": 3, "newCount": 1 }
+  ],
+  "cases": [
+    { "take": [], "expected": "one\r\ntwo\r\nthree\r\nfour\r\n" },
+    { "take": [0], "expected": "one\r\nthree\r\nfour\r\n" },
+    { "take": [1], "expected": "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n" },
+    { "take": [0, 1], "expected": "one\r\nthree\r\nfour\r\nfive\r\n" }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Old Mac line endings, one replaced line",
+  "local": "p\rq\rr\r",
+  "received": "p\rQ\rr\r",
+  "chunks": [{ "oldStart": 1, "oldCount": 1, "newStart": 1, "newCount": 1 }],
+  "cases": [
+    { "take": [], "expected": "p\rq\rr\r" },
+    { "take": [0], "expected": "p\rQ\rr\r" }
+  ]
+}

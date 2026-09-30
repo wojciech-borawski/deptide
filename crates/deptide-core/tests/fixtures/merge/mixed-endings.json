@@ -1,0 +1,15 @@
+{
+  "name": "Lines that differ only in their line ending, including a missing final break",
+  "local": "a\r\nb\nc\rd",
+  "received": "a\nb\nc\rd\n",
+  "chunks": [
+    { "oldStart": 0, "oldCount": 1, "newStart": 0, "newCount": 1 },
+    { "oldStart": 3, "oldCount": 1, "newStart": 3, "newCount": 1 }
+  ],
+  "cases": [
+    { "take": [], "expected": "a\r\nb\nc\rd" },
+    { "take": [0], "expected": "a\nb\nc\rd" },
+    { "take": [1], "expected": "a\r\nb\nc\rd\n" },
+    { "take": [0, 1], "expected": "a\nb\nc\rd\n" }
+  ]
+}

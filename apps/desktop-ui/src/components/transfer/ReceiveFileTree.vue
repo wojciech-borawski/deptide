@@ -32,7 +32,7 @@ const { list, cursor, activeId, idFor, onKeydown } = useFileCursor(
 );
 
 function folderState(folder: TreeFolder) {
-  return checkState(folder.files, transfer.selectedFor(props.source));
+  return checkState(folder.files, transfer.selectedFor(props.source), transfer.mixedFor(props.source));
 }
 
 function toggleFolderSelection(folder: TreeFolder): void {
@@ -98,6 +98,7 @@ function toggleFolderSelection(folder: TreeFolder): void {
         :depth="row.depth"
         tree
         :selected="transfer.isSelected(props.source, row.node.path)"
+        :choice="transfer.chunkChoiceFor(props.source, row.node.path)"
         :id="idFor(row.node.path)"
         :previewed="transfer.previewFor(props.source) === row.node.path"
         :active="cursor === row.node.path"

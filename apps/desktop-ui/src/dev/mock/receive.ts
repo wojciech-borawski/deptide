@@ -1,5 +1,7 @@
 import type {
+  FileSide,
   FileStatus,
+  MergedFile,
   ReceiveFile,
   ReceivePlan,
   ReceiveProjectPlan,
@@ -7,6 +9,7 @@ import type {
   ReceiveResult,
   ReceiveSelection,
 } from "@/api/types";
+import { mockReceiveFile } from "./receive-files";
 import { fakeRoot, projectsRoot } from "./workspace";
 
 function entry(relative: string, status: FileStatus, size: number): ReceiveFile {
@@ -90,13 +93,37 @@ export function mockReceivePlan(requests: ReceiveRequest[], disabledPatterns: st
   return { projects: requests.map((request) => projectPlan(request, disabled)) };
 }
 
+function sha256Of(side: FileSide | null): string | null {
+  return side?.kind === "text" ? side.sha256 : null;
+}
+
+/** Merges whose hashes still match the mock files, and the paths of those that do not. */
+function mockMerges(selection: ReceiveSelection): { merged: MergedFile[]; stale: string[] } {
+  const merged: MergedFile[] = [];
+  const stale: string[] = [];
+  for (const merge of selection.merges ?? []) {
+    const contents = mockReceiveFile(merge.relative, mockFileStatus(selection.target, merge.relative));
+    const current =
+      sha256Of(contents.local) === merge.localSha256 && sha256Of(contents.received) === merge.receivedSha256;
+    if (current) {
+      merged.push({ relative: merge.relative, taken: merge.chunks.length, total: merge.total, chunks: merge.chunks });
+    } else {
+      stale.push(merge.relative);
+    }
+  }
+  return { merged, stale };
+}
+
 export function mockReceiveResult(selections: ReceiveSelection[]): ReceiveResult {
   const projects = selections.map((selection) => {
     const statuses = new Map(filesFor(selection.target, new Set()).map((file) => [file.relative, file.status]));
+    const { merged, stale } = mockMerges(selection);
+    const mergePaths = new Set((selection.merges ?? []).map((merge) => merge.relative));
     const skipped = selection.files.filter((file) => file.startsWith(".env"));
-    const files = selection.files.filter((file) => !skipped.includes(file));
-    const added = files.filter((file) => (statuses.get(file) ?? "added") === "added").length;
-    const replaced = files.length - added;
+    const copied = selection.files.filter((file) => !skipped.includes(file) && !mergePaths.has(file));
+    const added = copied.filter((file) => (statuses.get(file) ?? "added") === "added").length;
+    const replaced = copied.length - added + merged.length;
+    const files = [...copied, ...merged.map((file) => file.relative)];
     return {
       target: selection.target,
       targetDirectory: `${projectsRoot}\\${selection.target}`,
@@ -108,6 +135,8 @@ export function mockReceiveResult(selections: ReceiveSelection[]): ReceiveResult
       files,
       deletedFiles: selection.delete,
       skipped,
+      merged,
+      stale,
     };
   });
 

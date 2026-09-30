@@ -262,7 +262,17 @@ export interface ReceiveProjectPlan {
 }
 
 export type FileSide =
-  | { kind: "text"; text: string; bom: boolean; size: number }
+  | {
+      kind: "text";
+      /** Without the byte order mark; invalid UTF-8 replaced. */
+      text: string;
+      bom: boolean;
+      size: number;
+      /** Lowercase hex SHA-256 of the whole file, BOM included. */
+      sha256: string;
+      /** Whether the bytes after the BOM are valid UTF-8. */
+      utf8: boolean;
+    }
   | { kind: "binary"; size: number }
   | { kind: "tooLarge"; size: number };
 
@@ -282,12 +292,42 @@ export interface ReceiveRequest {
   target: string;
 }
 
+/** One changed run of a line diff; 0-based line indexes after the BOM, old = target file, new = received file. */
+export interface LineChunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+}
+
+export interface FileMerge {
+  relative: string;
+  /** `sha256` of the received side the chunks were computed from. */
+  receivedSha256: string;
+  /** `sha256` of the target side the chunks were computed from. */
+  localSha256: string;
+  /** How many chunks the diff had. */
+  total: number;
+  /** The chunks to take, in file order. */
+  chunks: LineChunk[];
+}
+
 export interface ReceiveSelection {
   source: string;
   target: string;
   files: string[];
   /** Target files to move to the Recycle Bin; each must be absent from `source`. */
   delete: string[];
+  /** Files rebuilt from some chunks of the received file; a path here is never copied whole. */
+  merges?: FileMerge[];
+}
+
+export interface MergedFile {
+  relative: string;
+  taken: number;
+  total: number;
+  /** The chunks that were taken. */
+  chunks: LineChunk[];
 }
 
 export interface ReceiveProjectResult {
@@ -301,8 +341,12 @@ export interface ReceiveProjectResult {
   bytes: number;
   files: string[];
   deletedFiles: string[];
-  /** Entries of `files` or `delete` that failed validation and were left alone. */
+  /** Entries of `files`, `delete` or `merges` that failed validation and were left alone. */
   skipped: string[];
+  /** Merges written; their paths are in `files` and counted in `replaced`. */
+  merged: MergedFile[];
+  /** Merges left alone because either file is gone or no longer has the hash sent. */
+  stale: string[];
 }
 
 export interface ReceiveResult {

@@ -4,18 +4,27 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::files::BINARY_SNIFF_BYTES;
+use super::files::{sha256_hex, BINARY_SNIFF_BYTES};
 use super::receive::safe_relative;
 use crate::error::{AppError, AppResult};
 
 pub const PREVIEW_LIMIT: u64 = 1024 * 1024;
-const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+pub(super) const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FileSide {
-    /// UTF-8 text without its byte order mark; `bom` says whether the file had one.
-    Text { text: String, bom: bool, size: u64 },
+    /// Text without its byte order mark, invalid UTF-8 replaced; `bom` says
+    /// whether the file had one. `sha256` is the lowercase hex SHA-256 of the
+    /// whole file, BOM included, and `utf8` whether the bytes after the BOM
+    /// are valid UTF-8.
+    Text {
+        text: String,
+        bom: bool,
+        size: u64,
+        sha256: String,
+        utf8: bool,
+    },
     /// A NUL byte in the first 8 KiB.
     Binary { size: u64 },
     /// Text over `PREVIEW_LIMIT` bytes.
@@ -84,5 +93,7 @@ fn read_side(path: &Path) -> AppResult<Option<FileSide>> {
         text: String::from_utf8_lossy(body).into_owned(),
         bom,
         size,
+        sha256: sha256_hex(&bytes),
+        utf8: std::str::from_utf8(body).is_ok(),
     }))
 }

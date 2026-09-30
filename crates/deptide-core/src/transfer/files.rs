@@ -142,6 +142,10 @@ fn digest(path: &Path) -> Option<Vec<u8>> {
     Some(hasher.finalize().to_vec())
 }
 
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 /// Whether both files hold the same text once line endings (CRLF, LF, CR),
 /// trailing whitespace and blank lines are ignored. Indentation still counts.
 /// Always false for a file over 5 MiB or with a NUL byte in its first 8 KiB.
