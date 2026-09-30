@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use super::files::{
     collect_files, collect_received_files, copy_file, same_content, same_ignoring_whitespace,
-    to_posix, GIT_DIRECTORY,
+    sha256_hex, to_posix, GIT_DIRECTORY,
 };
+use super::merge::{merge_lines, LineChunk};
 use super::recycle::Recycler;
 use crate::error::{AppError, AppResult};
 use crate::scan::{read_project_at, MANIFEST_FILE_NAME};
@@ -57,6 +58,35 @@ pub struct ReceiveSelection {
     /// Target files to move to the Recycle Bin; each must be absent from `source`.
     #[serde(default)]
     pub delete: Vec<String>,
+    /// Files to rebuild from some chunks of the received file; a path here is
+    /// never copied whole, even when `files` lists it too.
+    #[serde(default)]
+    pub merges: Vec<FileMerge>,
+}
+
+/// The chunks of one file's line diff to take from the received file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMerge {
+    pub relative: String,
+    /// `FileSide::Text::sha256` of the received file the chunks were computed from.
+    pub received_sha256: String,
+    /// `FileSide::Text::sha256` of the target file the chunks were computed from.
+    pub local_sha256: String,
+    /// How many chunks the diff had.
+    pub total: usize,
+    /// The chunks to take, in file order.
+    pub chunks: Vec<LineChunk>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergedFile {
+    pub relative: String,
+    pub taken: usize,
+    pub total: usize,
+    /// The chunks that were taken.
+    pub chunks: Vec<LineChunk>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,8 +102,12 @@ pub struct ReceiveProjectResult {
     pub bytes: u64,
     pub files: Vec<String>,
     pub deleted_files: Vec<String>,
-    /// Entries of `files` or `delete` that failed validation and were left alone.
+    /// Entries of `files`, `delete` or `merges` that failed validation and were left alone.
     pub skipped: Vec<String>,
+    /// Merges written; their paths are in `files` and counted in `replaced`.
+    pub merged: Vec<MergedFile>,
+    /// Merges left alone because either file is gone or no longer has the hash sent.
+    pub stale: Vec<String>,
 }
 
 pub struct KnownProject {
@@ -197,6 +231,12 @@ struct PlannedDeletion {
     path: PathBuf,
 }
 
+struct PlannedMerge {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    file: MergedFile,
+}
+
 pub fn apply(
     selection: &ReceiveSelection,
     target_directory: &Path,
@@ -204,14 +244,35 @@ pub fn apply(
 ) -> AppResult<ReceiveProjectResult> {
     let source = Path::new(&selection.source);
     let mut skipped = Vec::new();
-    let copies = planned_copies(source, target_directory, &selection.files, &mut skipped);
+    let mut stale = Vec::new();
+    let merge_paths: HashSet<String> = selection
+        .merges
+        .iter()
+        .filter_map(|merge| safe_relative(&merge.relative))
+        .map(|relative| to_posix(&relative))
+        .collect();
+    let copies = planned_copies(
+        source,
+        target_directory,
+        &selection.files,
+        &merge_paths,
+        &mut skipped,
+    );
     let deletions = planned_deletions(source, target_directory, &selection.delete, &mut skipped);
+    let merges = planned_merges(
+        source,
+        target_directory,
+        &selection.merges,
+        &mut skipped,
+        &mut stale,
+    );
 
     let recycled: Vec<PathBuf> = copies
         .iter()
         .filter(|copy| copy.overwrites)
         .map(|copy| copy.to.clone())
         .chain(deletions.iter().map(|deletion| deletion.path.clone()))
+        .chain(merges.iter().map(|merge| merge.path.clone()))
         .collect();
     if !recycled.is_empty() {
         recycler.recycle(&recycled).map_err(|error| {
@@ -236,6 +297,8 @@ pub fn apply(
             .map(|deletion| deletion.relative.clone())
             .collect(),
         skipped,
+        merged: Vec::new(),
+        stale,
     };
 
     for copy in &copies {
@@ -253,6 +316,19 @@ pub fn apply(
         result.files.push(copy.relative.clone());
     }
 
+    for merge in merges {
+        fs::write(&merge.path, &merge.bytes).map_err(|error| {
+            AppError::new(format!(
+                "Writing the merged {} into {} failed, the file it replaced is in the Recycle Bin: {error}",
+                merge.file.relative, selection.target
+            ))
+        })?;
+        result.bytes += merge.bytes.len() as u64;
+        result.replaced += 1;
+        result.files.push(merge.file.relative.clone());
+        result.merged.push(merge.file);
+    }
+
     for deletion in &deletions {
         remove_emptied_folders(&deletion.path, target_directory);
     }
@@ -264,6 +340,7 @@ fn planned_copies(
     source: &Path,
     target_directory: &Path,
     entries: &[String],
+    merged: &HashSet<String>,
     skipped: &mut Vec<String>,
 ) -> Vec<PlannedCopy> {
     let mut seen = HashSet::new();
@@ -275,7 +352,7 @@ fn planned_copies(
             continue;
         };
         let posix = to_posix(&relative);
-        if !seen.insert(posix.clone()) {
+        if merged.contains(&posix) || !seen.insert(posix.clone()) {
             continue;
         }
 
@@ -295,6 +372,65 @@ fn planned_copies(
     }
 
     copies
+}
+
+/// Each merge whose files still hash as sent, with its output built in
+/// memory; stale ones go to `stale`, invalid ones to `skipped`.
+fn planned_merges(
+    source: &Path,
+    target_directory: &Path,
+    entries: &[FileMerge],
+    skipped: &mut Vec<String>,
+    stale: &mut Vec<String>,
+) -> Vec<PlannedMerge> {
+    let mut seen = HashSet::new();
+    let mut merges = Vec::new();
+
+    for entry in entries {
+        let Some(relative) = safe_relative(&entry.relative) else {
+            skipped.push(entry.relative.clone());
+            continue;
+        };
+        let posix = to_posix(&relative);
+        if !seen.insert(posix.clone()) {
+            skipped.push(entry.relative.clone());
+            continue;
+        }
+
+        let path = target_directory.join(&relative);
+        let (Some(local), Some(received)) =
+            (fs::read(&path).ok(), fs::read(source.join(&relative)).ok())
+        else {
+            stale.push(entry.relative.clone());
+            continue;
+        };
+        if sha256_hex(&local) != entry.local_sha256
+            || sha256_hex(&received) != entry.received_sha256
+        {
+            stale.push(entry.relative.clone());
+            continue;
+        }
+
+        let bytes = match merge_lines(&local, &received, &entry.chunks) {
+            Ok(bytes) if entry.chunks.len() <= entry.total => bytes,
+            _ => {
+                skipped.push(entry.relative.clone());
+                continue;
+            }
+        };
+        merges.push(PlannedMerge {
+            path,
+            bytes,
+            file: MergedFile {
+                relative: posix,
+                taken: entry.chunks.len(),
+                total: entry.total,
+                chunks: entry.chunks.clone(),
+            },
+        });
+    }
+
+    merges
 }
 
 fn planned_deletions(

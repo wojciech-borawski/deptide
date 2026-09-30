@@ -1,0 +1,10 @@
+{
+  "name": "Only the received file has a BOM, and the output leaves it out",
+  "local": "x\ny\nz\n",
+  "received": "﻿X\ny\nz\n",
+  "chunks": [{ "oldStart": 0, "oldCount": 1, "newStart": 0, "newCount": 1 }],
+  "cases": [
+    { "take": [], "expected": "x\ny\nz\n" },
+    { "take": [0], "expected": "X\ny\nz\n" }
+  ]
+}

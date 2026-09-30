@@ -6,6 +6,9 @@ import type {
   ClipboardDownload,
   ClipboardEntry,
   ExtractProgress,
+  FileSide,
+  LineChunk,
+  ReceiveFileContents,
   ReceivePlan,
   ReceiveProjectPlan,
   ReceiveProjectResult,
@@ -113,6 +116,8 @@ function projectResult(selection: ReceiveSelection): ReceiveProjectResult {
     files: selection.files,
     deletedFiles: selection.delete,
     skipped: [],
+    merged: [],
+    stale: [],
   };
 }
 
@@ -194,7 +199,7 @@ describe("transfer store", () => {
     backend.analyzeReceive.mockResolvedValue({ projects: [web] });
 
     store.toggleCopyPattern("dist/");
-    await store.toggleReceivePattern(root, "*.log");
+    store.toggleReceivePattern("*.log");
     expect(backend.analyzeReceive).not.toHaveBeenCalled();
 
     await store.analyze(root);
@@ -207,21 +212,18 @@ describe("transfer store", () => {
     );
   });
 
-  it("analyzes again when a Receive pattern is toggled while a plan is shown", async () => {
+  it("does not analyze again when a Receive pattern is toggled while a plan is shown", async () => {
     const store = await analyzed();
     backend.analyzeReceive.mockClear();
-    const apiWithoutRemoval = makeProject(api.source, "api", [file("index.ts", "replaced")]);
-    backend.analyzeReceive.mockResolvedValue({ projects: [web, apiWithoutRemoval, docs] });
 
-    await store.toggleReceivePattern(root, ".env.local");
+    store.toggleReceivePattern(".env.local");
 
-    expect(backend.analyzeReceive).toHaveBeenCalledTimes(1);
+    expect(backend.analyzeReceive).not.toHaveBeenCalled();
+    expect(store.receiveDisabled).toEqual([".env.local"]);
+    expect(store.tabs.map((project) => project.target)).toEqual(["web", "api"]);
+
+    await store.analyze(root);
     expect(backend.analyzeReceive.mock.calls[0]?.[3]).toEqual([".env.local"]);
-    expect(relatives(store.tabs.find((project) => project.source === api.source))).toEqual(["index.ts"]);
-
-    await store.toggleReceivePattern(root, ".env.local");
-    expect(backend.analyzeReceive).toHaveBeenCalledTimes(2);
-    expect(backend.analyzeReceive.mock.calls[1]?.[3]).toEqual([]);
   });
 
   it("opens a tab per changed project, lists the rest as unchanged, and ticks added, replaced and removed files", async () => {
@@ -420,18 +422,20 @@ describe("transfer store", () => {
     expect(store.preview).toBeNull();
   });
 
-  it("shows the plan of the latest toggle when the earlier analyze answers last", async () => {
+  it("shows the plan of the latest analyze when the earlier one answers last", async () => {
     const store = await analyzed();
     const first = deferred<ReceivePlan>();
     const second = deferred<ReceivePlan>();
     backend.analyzeReceive.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
 
-    const firstToggle = store.toggleReceivePattern(root, "*.log");
-    const secondToggle = store.toggleReceivePattern(root, "*.map");
+    store.toggleReceivePattern("*.log");
+    const firstAnalyze = store.analyze(root);
+    store.toggleReceivePattern("*.map");
+    const secondAnalyze = store.analyze(root);
     second.resolve({ projects: [makeProject(web.source, "web", [file("src/second.ts", "added")])] });
-    await secondToggle;
+    await secondAnalyze;
     first.resolve({ projects: [makeProject(web.source, "web", [file("src/first.ts", "added")])] });
-    await firstToggle;
+    await firstAnalyze;
 
     expect(backend.analyzeReceive.mock.calls.at(-1)?.[3]).toEqual(["*.log", "*.map"]);
     expect(store.tabs.map(relatives)).toEqual([["src/second.ts"]]);
@@ -445,16 +449,67 @@ describe("transfer store", () => {
       .mockReturnValueOnce(first.promise)
       .mockResolvedValueOnce({ projects: [makeProject(web.source, "web", [file("src/second.ts", "added")])] });
 
-    const firstToggle = store.toggleReceivePattern(root, "*.log");
-    await store.toggleReceivePattern(root, "*.map");
+    const firstAnalyze = store.analyze(root);
+    await store.analyze(root);
     first.reject(new Error("stale"));
-    await firstToggle;
+    await firstAnalyze;
 
     expect(store.receiveError).toBe("");
     expect(store.tabs.map(relatives)).toEqual([["src/second.ts"]]);
   });
 
-  it("keeps applied results and manual ticks when a pattern toggle analyzes again", async () => {
+  it("does not bring an ended session back when its Analyze answers late", async () => {
+    const store = useTransferStore();
+    await watchClipboard(store, [entry("web")]);
+    const pending = deferred<ReceivePlan>();
+    backend.analyzeReceive.mockReturnValueOnce(pending.promise);
+
+    const running = store.analyze(root);
+    store.endSession();
+    pending.resolve({ projects: [web] });
+    await running;
+
+    expect(store.hasSession).toBe(false);
+    expect(store.plan).toBeNull();
+    expect(store.receiveStep).toBe("clipboard");
+  });
+
+  it("does not bring an ended session back when the plan refresh after a failed replace answers late", async () => {
+    const store = await analyzed();
+    backend.applyReceive.mockRejectedValue(new Error("api: access denied"));
+    const refreshing = deferred<ReceivePlan>();
+    backend.analyzeReceive.mockReturnValueOnce(refreshing.promise);
+
+    const running = store.apply(root, api.source);
+    await vi.waitFor(() => expect(backend.analyzeReceive).toHaveBeenCalledTimes(2));
+    store.endSession();
+    refreshing.resolve(structuredClone(plan));
+    await running;
+
+    expect(store.hasSession).toBe(false);
+    expect(store.plan).toBeNull();
+    expect(store.receiveStep).toBe("clipboard");
+  });
+
+  it("keeps the plan of a newer Analyze when the refresh after a failed replace answers late", async () => {
+    const store = await analyzed();
+    backend.applyReceive.mockRejectedValue(new Error("api: access denied"));
+    const refreshing = deferred<ReceivePlan>();
+    backend.analyzeReceive.mockReturnValueOnce(refreshing.promise);
+
+    const running = store.apply(root, api.source);
+    await vi.waitFor(() => expect(backend.analyzeReceive).toHaveBeenCalledTimes(2));
+    backend.analyzeReceive.mockResolvedValueOnce({
+      projects: [makeProject(web.source, "web", [file("src/newer.ts", "added")])],
+    });
+    await store.analyze(root);
+    refreshing.resolve(structuredClone(plan));
+    await running;
+
+    expect(store.tabs.map(relatives)).toEqual([["src/newer.ts"]]);
+  });
+
+  it("keeps applied results and manual ticks when Analyze runs again on the same clipboard", async () => {
     const store = await analyzed();
     await store.apply(root, web.source);
     store.toggleFile(api.source, "gone.ts");
@@ -470,7 +525,8 @@ describe("transfer store", () => {
     ]);
     backend.analyzeReceive.mockResolvedValue({ projects: [webAfterApply, apiAgain, docs] });
 
-    await store.toggleReceivePattern(root, "*.log");
+    store.toggleReceivePattern("*.log");
+    await store.analyze(root);
 
     expect(store.results[web.source]?.result.files).toEqual(["src/new.ts"]);
     expect(store.tabs.map((project) => project.target)).toEqual(["web", "api"]);
@@ -481,7 +537,9 @@ describe("transfer store", () => {
 
   it("analyzes the shown plan again after a failed replace and keeps the error visible", async () => {
     const store = await analyzed();
-    await store.toggleReceivePattern(root, "*.log");
+    store.toggleReceivePattern("*.log");
+    await store.analyze(root);
+    store.toggleReceivePattern("*.log");
     store.receivePatterns = "*.tmp";
     const webApplied = makeProject(web.source, "web", [
       file("src/new.ts", "identical"),
@@ -528,8 +586,9 @@ describe("transfer store", () => {
     expect(store.results[web.source]?.result.target).toBe("web");
   });
 
-  it("drops an analyze answer that arrives after the clipboard changed", async () => {
-    const store = await analyzed();
+  it("keeps an analyze answer that arrives after the clipboard changed, as the session of the analyzed clipboard", async () => {
+    const store = useTransferStore();
+    await watchClipboard(store, [entry("web"), entry("api"), entry("docs")]);
     const pending = deferred<ReceivePlan>();
     backend.analyzeReceive.mockReturnValueOnce(pending.promise);
 
@@ -538,8 +597,361 @@ describe("transfer store", () => {
     pending.resolve(structuredClone(plan));
     await running;
 
+    expect(store.tabs.map((project) => project.target)).toEqual(["web", "api"]);
+    expect(store.clipboardChanged).toBe(true);
+    expect(store.receiveStep).toBe("review");
+    expect(store.entries.map((found) => found.name)).toEqual(["other"]);
+  });
+
+  it("keeps the plan, ticks and results when the clipboard changes to text or to other folders", async () => {
+    const store = await analyzed();
+    await store.apply(root, web.source);
+    store.toggleFile(api.source, "gone.ts");
+    expect(store.clipboardChanged).toBe(false);
+
+    await poll(store, { source: "empty", sequence: 12, entries: [], rejected: 0, problem: null });
+
+    expect(store.clipboardChanged).toBe(true);
+    expect(store.entries).toEqual([]);
+    expect(store.tabs.map((project) => project.target)).toEqual(["web", "api"]);
+    expect([...store.selectedFor(api.source)]).toEqual(["index.ts"]);
+    expect(store.results[web.source]?.result.target).toBe("web");
+
+    await watchClipboard(store, [entry("other")]);
+
+    expect(store.clipboardChanged).toBe(true);
+    expect({ ...store.targets }).toEqual({ "C:\\clip\\other": "other" });
+    expect(store.tabs.map((project) => project.target)).toEqual(["web", "api"]);
+    expect(store.results[web.source]?.result.target).toBe("web");
+    expect([...store.selectedFor(api.source)]).toEqual(["index.ts"]);
+    expect(store.pendingCount).toBe(1);
+
+    await watchClipboard(store, [entry("web"), entry("api"), entry("docs")]);
+    expect(store.clipboardChanged).toBe(false);
+  });
+
+  it("starts a new session when Analyze runs on another clipboard", async () => {
+    const store = await analyzed();
+    await store.apply(root, web.source);
+    await watchClipboard(store, [entry("other")]);
+    const other = makeProject("C:\\clip\\other", "other", [file("x.ts", "added")]);
+    backend.analyzeReceive.mockResolvedValue({ projects: [other] });
+
+    await store.analyze(root);
+
+    expect(backend.analyzeReceive).toHaveBeenLastCalledWith(root, [{ source: other.source, target: "other" }], [], []);
+    expect(store.tabs.map((project) => project.target)).toEqual(["other"]);
+    expect(store.results).toEqual({});
+    expect(store.clipboardChanged).toBe(false);
+    expect(store.activeSource).toBe(other.source);
+  });
+
+  it("drops the results, ticks and chunk choices of projects also in the plan of another clipboard", async () => {
+    const store = await analyzed();
+    await store.apply(root, web.source);
+    store.toggleFile(api.source, "gone.ts");
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    backend.readReceiveFile.mockResolvedValue(contents("l1", "r1"));
+    await watchClipboard(store, [entry("web"), entry("api")]);
+    backend.analyzeReceive.mockResolvedValue({ projects: [web, api] });
+
+    await store.analyze(root);
+
+    expect(store.clipboardChanged).toBe(false);
+    expect(store.results).toEqual({});
+    expect(store.pendingCount).toBe(2);
+    expect([...store.selectedFor(api.source)].sort()).toEqual(["gone.ts", "index.ts"]);
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+  });
+
+  it("closing a tab after the clipboard changed leaves the targets of the new clipboard alone", async () => {
+    const store = await analyzed();
+    await watchClipboard(store, [entry("web", "api")]);
+
+    store.closeProject(web.source);
+
+    expect(store.tabs.map((project) => project.target)).toEqual(["api"]);
+    expect({ ...store.targets }).toEqual({ [web.source]: "api" });
+  });
+
+  it("changing a target after the clipboard changed leaves the session alone", async () => {
+    const store = await analyzed();
+    await watchClipboard(store, [entry("web", "api")]);
+
+    store.setTarget(web.source, "");
+
+    expect(store.tabs.map((project) => project.target)).toEqual(["web", "api"]);
+  });
+
+  it("goes to the review step after Analyze and back to the clipboard step without losing the session", async () => {
+    const store = useTransferStore();
+    expect(store.receiveStep).toBe("clipboard");
+    expect(store.hasSession).toBe(false);
+    store.setReceiveStep("review");
+    expect(store.receiveStep).toBe("clipboard");
+
+    await watchClipboard(store, [entry("web"), entry("api"), entry("docs")]);
+    backend.analyzeReceive.mockResolvedValue(structuredClone(plan));
+    await store.analyze(root);
+
+    expect(store.receiveStep).toBe("review");
+    expect(store.hasSession).toBe(true);
+
+    store.setReceiveStep("clipboard");
+    expect(store.receiveStep).toBe("clipboard");
+    expect(store.tabs).toHaveLength(2);
+
+    store.setReceiveStep("review");
+    expect(store.receiveStep).toBe("review");
+  });
+
+  it("stays on the clipboard step when Analyze fails", async () => {
+    const store = useTransferStore();
+    await watchClipboard(store, [entry("web")]);
+    backend.analyzeReceive.mockRejectedValue("web: not a project");
+
+    await store.analyze(root);
+
+    expect(store.receiveStep).toBe("clipboard");
+    expect(store.hasSession).toBe(false);
+    expect(store.receiveError).toBe("web: not a project");
+  });
+
+  it("ends the session on Receive more and goes back to the clipboard step", async () => {
+    const store = await analyzed();
+    await store.apply(root);
+    expect(store.pendingCount).toBe(0);
+    store.setPreview(web.source, "src/new.ts");
+
+    store.endSession();
+
+    expect(store.hasSession).toBe(false);
     expect(store.plan).toBeNull();
-    expect(store.tabs).toEqual([]);
+    expect(store.results).toEqual({});
+    expect(store.previewFor(web.source)).toBeNull();
+    expect(store.receiveStep).toBe("clipboard");
+    expect(store.clipboardChanged).toBe(false);
+    expect(store.entries).toHaveLength(3);
+  });
+});
+
+const threeChunks: LineChunk[] = [
+  { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1 },
+  { oldStart: 4, oldCount: 0, newStart: 4, newCount: 2 },
+  { oldStart: 9, oldCount: 1, newStart: 11, newCount: 1 },
+];
+
+const indexChunks = { receivedSha256: "r1", localSha256: "l1", chunks: threeChunks };
+
+function hashed(sha256: string): FileSide {
+  return { kind: "text", text: "", bom: false, size: 0, sha256, utf8: true };
+}
+
+function contents(localSha256: string, receivedSha256: string): ReceiveFileContents {
+  return { local: hashed(localSha256), received: hashed(receivedSha256) };
+}
+
+describe("transfer store chunk choices", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    resetBackend();
+    backend.applyReceive.mockImplementation(async (_root: string, selections: ReceiveSelection[]) =>
+      resultFor(selections),
+    );
+  });
+
+  it("takes every chunk of a replaced file and none of a whitespace-only file until chosen", async () => {
+    const store = await analyzed();
+
+    expect(store.isChunkTaken(api.source, "index.ts", 2)).toBe(true);
+    expect(store.isChunkTaken(web.source, "src/app.ts", 0)).toBe(false);
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+    expect(store.fileState(web.source, "src/app.ts")).toBe("unchecked");
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+  });
+
+  it("marks a file mixed while some chunks are kept, and whole again when all or none are taken", async () => {
+    const store = await analyzed();
+
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    expect(store.fileState(api.source, "index.ts")).toBe("indeterminate");
+    expect(store.isChunkTaken(api.source, "index.ts", 1)).toBe(false);
+    expect([...(store.chunkChoiceFor(api.source, "index.ts")?.taken ?? [])]).toEqual([0, 2]);
+    expect([...store.mixedFor(api.source)]).toEqual(["index.ts"]);
+
+    store.setChunks(api.source, "index.ts", indexChunks, [1], true);
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+
+    store.setChunks(api.source, "index.ts", indexChunks, [0, 1, 2], false);
+    expect(store.fileState(api.source, "index.ts")).toBe("unchecked");
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+
+    store.setChunks(web.source, "src/app.ts", indexChunks, [2], true);
+    expect(store.fileState(web.source, "src/app.ts")).toBe("indeterminate");
+  });
+
+  it("ignores a choice made on other contents of the file and never carries its chunks over", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1, 2], false);
+    const changed = { receivedSha256: "r2", localSha256: "l1", chunks: [...threeChunks, threeChunks[2] as LineChunk] };
+
+    expect(store.isChunkTaken(api.source, "index.ts", 1, changed)).toBe(true);
+    expect(store.fileState(api.source, "index.ts", changed)).toBe("checked");
+    expect(store.fileState(api.source, "index.ts")).toBe("indeterminate");
+    expect(store.isChunkTaken(api.source, "index.ts", 1)).toBe(false);
+
+    store.setChunks(api.source, "index.ts", changed, [3], false);
+
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toMatchObject({ receivedSha256: "r2", localSha256: "l1" });
+    expect([...(store.chunkChoiceFor(api.source, "index.ts")?.taken ?? [])]).toEqual([0, 1, 2]);
+
+    store.setChunks(web.source, "src/app.ts", indexChunks, [0], true);
+    store.setChunks(web.source, "src/app.ts", { ...indexChunks, localSha256: "l2" }, [1], true);
+    expect([...(store.chunkChoiceFor(web.source, "src/app.ts")?.taken ?? [])]).toEqual([1]);
+  });
+
+  it("counts a mixed file once and sends it as a merge of the taken chunks, not as a copied file", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+
+    expect(store.countFor(api.source)).toBe(2);
+
+    await store.apply(root, api.source);
+
+    expect(backend.applyReceive).toHaveBeenCalledWith(root, [
+      {
+        source: api.source,
+        target: "api",
+        files: [],
+        delete: ["gone.ts"],
+        merges: [
+          {
+            relative: "index.ts",
+            receivedSha256: "r1",
+            localSha256: "l1",
+            total: 3,
+            chunks: [threeChunks[0], threeChunks[2]],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("applies a project whose only change is a merge", async () => {
+    const store = await analyzed();
+    store.toggleFile(api.source, "gone.ts");
+    store.setChunks(api.source, "index.ts", indexChunks, [0], false);
+
+    await store.apply(root, api.source);
+
+    expect(backend.applyReceive.mock.calls[0]?.[1]?.[0]?.merges).toHaveLength(1);
+  });
+
+  it("drops the chunk choice when the file is ticked, unticked or reset by a selection chip", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+
+    store.toggleFile(api.source, "index.ts");
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    store.setFiles(api.source, ["index.ts"], false);
+    expect(store.fileState(api.source, "index.ts")).toBe("unchecked");
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+
+    store.setChunks(api.source, "index.ts", indexChunks, [1], true);
+    store.selectFiles(api.source, "changes", true);
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+  });
+
+  it("keeps chunk choices on Analyze again when both files are unchanged", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    backend.readReceiveFile.mockResolvedValue(contents("l1", "r1"));
+
+    await store.analyze(root);
+
+    expect(backend.readReceiveFile).toHaveBeenCalledWith(root, api.source, "api", "index.ts");
+    expect(store.fileState(api.source, "index.ts")).toBe("indeterminate");
+    expect(store.countFor(api.source)).toBe(2);
+  });
+
+  it("drops chunk choices on Analyze again when either file changed, back to the default tick", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    store.setChunks(web.source, "src/app.ts", indexChunks, [1], true);
+    backend.readReceiveFile.mockImplementation(async (_root: string, source: string) =>
+      source === api.source ? contents("l2", "r1") : contents("l1", "r2"),
+    );
+
+    await store.analyze(root);
+
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+    expect(store.fileState(web.source, "src/app.ts")).toBe("unchecked");
+  });
+
+  it("drops a chunk choice on Analyze again when its file cannot be read", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    backend.readReceiveFile.mockRejectedValue(new Error("locked"));
+
+    await store.analyze(root);
+
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+    expect(store.receiveError).toBe("");
+  });
+
+  it("keeps a chunk choice changed while Analyze again is still reading the file", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    const reading = deferred<ReceiveFileContents>();
+    backend.readReceiveFile.mockReturnValueOnce(reading.promise);
+
+    const running = store.analyze(root);
+    await vi.waitFor(() => expect(backend.readReceiveFile).toHaveBeenCalledTimes(1));
+    store.setChunks(api.source, "index.ts", indexChunks, [0], false);
+    reading.resolve(contents("l2", "r1"));
+    await running;
+
+    expect([...(store.chunkChoiceFor(api.source, "index.ts")?.taken ?? [])]).toEqual([2]);
+    expect(store.fileState(api.source, "index.ts")).toBe("indeterminate");
+  });
+
+  it("checks chunk choices against the files again after a failed replace", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    backend.applyReceive.mockRejectedValue(new Error("api: access denied"));
+    backend.readReceiveFile.mockResolvedValue(contents("l2", "r1"));
+
+    await store.apply(root, api.source);
+
+    expect(backend.readReceiveFile).toHaveBeenCalledWith(root, api.source, "api", "index.ts");
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+    expect(store.fileState(api.source, "index.ts")).toBe("checked");
+    expect(store.receiveError).toBe("Error: api: access denied");
+  });
+
+  it("drops chunk choices on Analyze again when the file status changed or the file is gone", async () => {
+    const store = await analyzed();
+    store.setChunks(api.source, "index.ts", indexChunks, [1], false);
+    store.setChunks(web.source, "src/app.ts", indexChunks, [1], true);
+    backend.readReceiveFile.mockResolvedValue(contents("l1", "r1"));
+    const apiAgain = makeProject(api.source, "api", [file("index.ts", "whitespace"), file("gone.ts", "removed")]);
+    const webAgain = makeProject(web.source, "web", [file("src/new.ts", "added")]);
+    backend.analyzeReceive.mockResolvedValue({ projects: [webAgain, apiAgain, docs] });
+
+    await store.analyze(root);
+
+    expect(store.chunkChoiceFor(api.source, "index.ts")).toBeNull();
+    expect(store.fileState(api.source, "index.ts")).toBe("unchecked");
+    expect([...store.mixedFor(web.source)]).toEqual([]);
+    expect(backend.readReceiveFile).not.toHaveBeenCalled();
   });
 });
 
@@ -635,7 +1047,8 @@ describe("transfer store with files from a remote desktop", () => {
     expect(store.downloadShown).toBe(false);
     reused.resolve(downloaded(7, ["web"]));
     await again;
-    await store.toggleReceivePattern(root, "*.log");
+    store.toggleReceivePattern("*.log");
+    await store.analyze(root);
 
     expect(backend.downloadClipboard.mock.calls.map(([sequence]) => sequence)).toEqual([7, 7, 7]);
     expect(backend.analyzeReceive).toHaveBeenCalledTimes(3);
@@ -666,7 +1079,7 @@ describe("transfer store with files from a remote desktop", () => {
     }
   });
 
-  it("forgets the download, the plan and the targets when the clipboard sequence changes", async () => {
+  it("resets the targets and keeps the session when the clipboard sequence changes, and downloads again on Analyze", async () => {
     const store = useTransferStore();
     await poll(store, remote(7, ["web", "api"]));
     backend.downloadClipboard.mockResolvedValue(downloaded(7, ["web", "api"]));
@@ -676,8 +1089,10 @@ describe("transfer store with files from a remote desktop", () => {
 
     await poll(store, remote(8, ["web", "api"]));
 
-    expect(store.plan).toBeNull();
+    expect(store.tabs.map((project) => project.source)).toEqual([receivedPath(7, "web"), receivedPath(7, "api")]);
+    expect(store.clipboardChanged).toBe(true);
     expect(store.download).toBeNull();
+    expect(store.folderFor(remoteId(8, "web"))).toBeNull();
     expect({ ...store.targets }).toEqual({ [remoteId(8, "web")]: "web", [remoteId(8, "api")]: "api" });
 
     backend.downloadClipboard.mockResolvedValue(downloaded(8, ["web", "api"]));
@@ -688,7 +1103,7 @@ describe("transfer store with files from a remote desktop", () => {
     expect(store.tabs.map((project) => project.source)).toEqual([receivedPath(8, "web"), receivedPath(8, "api")]);
   });
 
-  it("forgets the download when only the sequence changes, not the folder ids", async () => {
+  it("treats a new sequence with the same folder ids as another clipboard", async () => {
     const store = useTransferStore();
     await poll(store, remote(7, ["web"]));
     backend.downloadClipboard.mockResolvedValue(downloaded(7, ["web"]));
@@ -698,7 +1113,13 @@ describe("transfer store with files from a remote desktop", () => {
     await poll(store, { ...remote(7, ["web"]), sequence: 8 });
 
     expect(store.download).toBeNull();
-    expect(store.plan).toBeNull();
+    expect(store.clipboardChanged).toBe(true);
+    expect(store.tabs).toHaveLength(1);
+
+    await poll(store, remote(7, ["web"]));
+
+    expect(store.download?.directory).toBe("C:\\recv\\7");
+    expect(store.clipboardChanged).toBe(false);
   });
 
   it("shows the download progress while it runs, with the other actions busy", async () => {
@@ -764,7 +1185,7 @@ describe("transfer store with files from a remote desktop", () => {
     expect(store.receiveError).toBe("The receive state is not available");
   });
 
-  it("drops a download that finishes after the clipboard changed", async () => {
+  it("analyzes a download that finishes after the clipboard changed, as the session of the analyzed clipboard", async () => {
     const store = useTransferStore();
     await poll(store, remote(7, ["web"]));
     const pending = deferred<ClipboardDownload>();
@@ -773,12 +1194,18 @@ describe("transfer store with files from a remote desktop", () => {
     const running = store.analyze(root);
     await poll(store, remote(8, ["web"]));
     progressReporter()(halfway);
-    expect(store.downloadProgress).toBeNull();
+    expect(store.downloadProgress).toEqual(halfway);
     pending.resolve(downloaded(7, ["web"]));
     await running;
 
-    expect(backend.analyzeReceive).not.toHaveBeenCalled();
-    expect(store.plan).toBeNull();
+    expect(backend.analyzeReceive).toHaveBeenCalledWith(
+      root,
+      [{ source: receivedPath(7, "web"), target: "web" }],
+      [],
+      [],
+    );
+    expect(store.tabs.map((project) => project.source)).toEqual([receivedPath(7, "web")]);
+    expect(store.clipboardChanged).toBe(true);
     expect(store.download).toBeNull();
     expect(store.downloading).toBe(false);
     expect(store.entries.map((entry) => entry.path)).toEqual([remoteId(8, "web")]);
@@ -811,8 +1238,11 @@ describe("transfer store with files from a remote desktop", () => {
     expect(store.tabs.map((project) => project.source)).toEqual([receivedPath(8, "web")]);
   });
 
-  it("does not show the error of a download that fails after the clipboard changed", async () => {
+  it("shows the error of a download that fails because the clipboard changed and keeps the earlier session", async () => {
     const store = useTransferStore();
+    await poll(store, remote(6, ["web"]));
+    backend.downloadClipboard.mockResolvedValueOnce(downloaded(6, ["web"]));
+    await store.analyze(root);
     await poll(store, remote(7, ["web"]));
     const pending = deferred<ClipboardDownload>();
     backend.downloadClipboard.mockReturnValueOnce(pending.promise);
@@ -822,8 +1252,9 @@ describe("transfer store with files from a remote desktop", () => {
     pending.reject("The clipboard changed, analyze again");
     await running;
 
-    expect(store.receiveError).toBe("");
-    expect(store.plan).toBeNull();
+    expect(store.receiveError).toBe("The clipboard changed, analyze again");
+    expect(store.tabs.map((project) => project.source)).toEqual([receivedPath(6, "web")]);
+    expect(store.clipboardChanged).toBe(true);
   });
 
   it("keeps the targets and the running download when a poll returns the same clipboard", async () => {
@@ -877,7 +1308,7 @@ describe("transfer store with files from a remote desktop", () => {
     expect(backend.downloadClipboard.mock.calls.map(([sequence]) => sequence)).toEqual([7, 7]);
   });
 
-  it("clears the folders and shows the problem when the clipboard cannot be read", async () => {
+  it("clears the folders, keeps the session and shows the problem when the clipboard cannot be read", async () => {
     const store = useTransferStore();
     await poll(store, remote(7, ["web"]));
     backend.downloadClipboard.mockResolvedValue(downloaded(7, ["web"]));
@@ -892,13 +1323,14 @@ describe("transfer store with files from a remote desktop", () => {
       problem: "The clipboard file list is malformed",
     });
     expect(store.entries).toEqual([]);
-    expect(store.plan).toBeNull();
+    expect(store.tabs).toHaveLength(1);
+    expect(store.clipboardChanged).toBe(true);
     expect(store.download).toBeNull();
   });
 
   it("never downloads a file list", async () => {
     const store = await analyzed();
-    await store.toggleReceivePattern(root, "*.log");
+    await store.analyze(root);
 
     expect(backend.downloadClipboard).not.toHaveBeenCalled();
     expect(store.clipboard.source).toBe("paths");
@@ -922,7 +1354,7 @@ describe("transfer store with files from a remote desktop", () => {
     expect(store.tabs).toEqual([]);
   });
 
-  it("analyzes the downloaded folders again after a failed replace, asking the backend for its kept download", async () => {
+  it("analyzes the downloaded folders of the session again after a failed replace, without downloading", async () => {
     const store = useTransferStore();
     await poll(store, remote(7, ["web"]));
     backend.downloadClipboard.mockResolvedValue(downloaded(7, ["web"]));
@@ -938,26 +1370,50 @@ describe("transfer store with files from a remote desktop", () => {
       [],
       [],
     );
-    expect(backend.downloadClipboard.mock.calls.map(([sequence]) => sequence)).toEqual([7, 7]);
+    expect(backend.downloadClipboard).toHaveBeenCalledTimes(1);
     expect(store.receiveError).toBe("Error: web: access denied");
   });
 
-  it("does not download a new clipboard when a replace fails after the clipboard changed", async () => {
+  it("analyzes the session folders, not the new clipboard, when a replace fails after the clipboard changed", async () => {
     const store = useTransferStore();
-    await poll(store, remote(7, ["web"]));
-    backend.downloadClipboard.mockResolvedValue(downloaded(7, ["web"]));
+    await poll(store, remote(7, ["web", "api"]));
+    backend.downloadClipboard.mockResolvedValue(downloaded(7, ["web", "api"]));
     await store.analyze(root);
     const replacing = deferred<ReceiveResult>();
     backend.applyReceive.mockReturnValueOnce(replacing.promise);
+    backend.analyzeReceive.mockClear();
 
     const running = store.apply(root);
-    await poll(store, remote(8, ["web"]));
+    await poll(store, remote(8, ["other"]));
     replacing.reject(new Error("web: access denied"));
     await running;
 
     expect(backend.downloadClipboard).toHaveBeenCalledTimes(1);
+    expect(backend.analyzeReceive).toHaveBeenCalledWith(
+      root,
+      [
+        { source: receivedPath(7, "web"), target: "web" },
+        { source: receivedPath(7, "api"), target: "api" },
+      ],
+      [],
+      [],
+    );
     expect(store.downloading).toBe(false);
-    expect(store.plan).toBeNull();
+    expect(store.tabs).toHaveLength(2);
+    expect(store.clipboardChanged).toBe(true);
     expect(store.receiveError).toBe("Error: web: access denied");
+  });
+
+  it("closing the tab of a downloaded folder after the clipboard changed leaves the new targets alone", async () => {
+    const store = useTransferStore();
+    await poll(store, remote(7, ["web", "api"]));
+    backend.downloadClipboard.mockResolvedValue(downloaded(7, ["web", "api"]));
+    await store.analyze(root);
+    await poll(store, remote(8, ["web"]));
+
+    store.closeProject(receivedPath(7, "web"));
+
+    expect(store.tabs.map((project) => project.source)).toEqual([receivedPath(7, "api")]);
+    expect({ ...store.targets }).toEqual({ [remoteId(8, "web")]: "web" });
   });
 });

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ActionButton from "@/components/ui/ActionButton.vue";
@@ -8,6 +9,7 @@ import type { ReceivedProject } from "@/stores/transfer";
 const props = defineProps<{ received: ReceivedProject }>();
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
+const merged = computed(() => new Map(props.received.result.merged.map((file) => [file.relative, file])));
 </script>
 
 <template>
@@ -37,10 +39,21 @@ const { t } = useI18n();
         <li v-for="path in props.received.result.skipped" :key="path">{{ path }}</li>
       </ul>
     </section>
+    <section v-if="props.received.result.stale.length" class="block">
+      <h4 class="warn">{{ t("transfer.resultStale") }} ({{ props.received.result.stale.length }})</h4>
+      <ul class="mono selectable">
+        <li v-for="path in props.received.result.stale" :key="path">{{ path }}</li>
+      </ul>
+    </section>
     <section v-if="props.received.result.files.length" class="block">
       <h4>{{ t("transfer.resultCopied") }} ({{ props.received.result.files.length }})</h4>
       <ul class="mono selectable">
-        <li v-for="path in props.received.result.files" :key="path">{{ path }}</li>
+        <li v-for="path in props.received.result.files" :key="path">
+          {{ path }}
+          <span v-if="merged.get(path)" class="muted chunks">{{
+            t("transfer.resultChunks", { taken: merged.get(path)?.taken, total: merged.get(path)?.total })
+          }}</span>
+        </li>
       </ul>
     </section>
     <section v-if="props.received.result.deletedFiles.length" class="block">
@@ -94,5 +107,11 @@ ul {
 .small {
   font-size: 12px;
   margin: 0;
+}
+
+.chunks {
+  margin-left: 6px;
+  font-family: var(--font);
+  font-size: 11.5px;
 }
 </style>

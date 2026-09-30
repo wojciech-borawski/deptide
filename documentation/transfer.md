@@ -32,16 +32,27 @@ written to `transfers/<stamp>-copy.json` in the workspace.
 
 ## Receive
 
-While the Receive tab is open, Deptide checks the clipboard every two seconds
-for folders. Each folder that holds a `package.json` is matched to a configured
-project by folder name, by the target folder name, or by the package name; the
-match can be changed or set to "Do not receive". The configured ignore
-patterns show as chips that can be switched off for this run, as on the Copy
-tab; switching one while a plan is shown runs Analyze again, keeping the
-results of projects already replaced and the ticks of files whose status did
-not change. The chips and the Analyze button are disabled while Analyze runs,
-and only the answer to the latest Analyze is shown. Run-only ignore patterns
-can be added here as well.
+Receive is a two-step wizard with a stepper header like the Update wizard.
+Step 1, "Clipboard", is where the incoming folders are chosen. Step 2, "Review
+& replace", is where the files are picked and replaced. A successful Analyze
+moves to step 2. "Back", Alt+Left and a click on step 1 go back to step 1.
+Alt+Right and a click on step 2 go forward, but only while a receive session
+exists (see [Session](#session)); without one, step 2 cannot be reached.
+Alt+Left and Alt+Right are ignored while the cursor is in a text area. A step
+that can be clicked is also a button, so Tab reaches it and Enter or Space
+opens it. Enter does not start Analyze; the button in the footer of step 1
+does.
+
+Step 1 holds everything that decides what is analyzed. While the Receive tab is
+open, Deptide checks the clipboard every two seconds for folders. Each folder
+that holds a `package.json` is matched to a configured project by folder name,
+by the target folder name, or by the package name; the match can be changed or
+set to "Do not receive". The configured ignore patterns show as chips that can
+be switched off for this run, as on the Copy tab. Run-only ignore patterns can
+be added here as well. The chips and the Analyze button are disabled while
+Analyze runs, and only the answer to the latest Analyze is shown. The chips
+and the run-only patterns exist on step 1 only and are read when Analyze
+starts; switching a chip does not run Analyze again.
 
 ### Where the folders come from
 
@@ -64,16 +75,17 @@ switch. A line above the folder list says which one it found:
 While the download runs, a progress bar shows files and bytes done out of the
 total (a moving stripe while the total size is not known yet), with a Cancel
 button. The bar appears with the first progress report, or after 300 ms if
-none has come. Analyze, the target lists, the ignore chips and Replace are
-disabled from the moment Analyze is pressed until the download ends. A
+none has come. Analyze and the ignore chips are
+disabled from the moment Analyze is pressed, and the target lists until the
+download ends. A
 cancelled or failed download shows its error in the error banner and leaves
 no plan; "The remote desktop stopped sending files" means nothing arrived for
-60 seconds. Every Analyze, chip toggle, or analysis after a failed replace asks
-the backend for the download again; on the same clipboard the backend returns
+60 seconds. Every Analyze on a remote-desktop clipboard asks the backend for the
+download; on the same clipboard the backend returns
 the earlier download at once, without a progress bar, as long as all its
 folders still exist, and downloads again otherwise. If a folder on the
 clipboard is missing from the download, the error banner says so and asks to
-copy the folders again on the remote desktop; no plan is shown.
+copy the folders again on the remote desktop; the session keeps its earlier plan, if it has one.
 
 Other lines that can appear:
 
@@ -81,14 +93,19 @@ Other lines that can appear:
   are never downloaded (the rules are under
   [Files without a path on the clipboard](#files-without-a-path-on-the-clipboard)).
 - "The clipboard is busy, trying again": another program held the clipboard.
-  The folders, targets and plan on screen stay as they were until the next
-  check reads it.
+  The folders and targets on screen, and the session, stay as they were until
+  the next check reads it.
 - The reason the clipboard could not be read. The folder list is emptied.
 
-A new clipboard (other folders, or the same folders copied again in the remote
-session) clears the targets, the plan and the kept download. The answer to an
-Analyze or download that started before the change is dropped; a check that
-finds the same clipboard, including one during a download, changes nothing.
+The clipboard check only updates step 1. When the clipboard changes (other
+folders, or the same folders copied again in the remote session), the folder
+list and the targets are rebuilt from the new clipboard, and the line above
+the list reads "not downloaded yet" again for a remote-desktop clipboard. The
+session on step 2 is left alone, see [Session](#session). A check that finds
+the same clipboard, including one during a download, changes nothing.
+
+Changing a target on step 1 drops the plan of that project from the session
+while the clipboard is unchanged; Analyze brings it back.
 
 Ignore files above a received folder, such as a stray `%TEMP%\.gitignore`, are
 not applied to it. What applies is the ignore patterns, the `.gitignore` and
@@ -96,6 +113,32 @@ not applied to it. What applies is the ignore patterns, the `.gitignore` and
 Git repository inside the folder, and this machine's global Git excludes file
 (`core.excludesFile` from the user's Git config, otherwise
 `.config\git\ignore` in the home folder).
+
+### Session
+
+A successful Analyze starts a receive session. It holds the plan, the ticks,
+the chunk choices, the results of replaced projects and the kept download, and
+it does not depend on what the clipboard holds afterwards:
+
+- If the clipboard changes while a session exists, step 2 shows the notice
+  "The clipboard has changed." with a "Back to Clipboard" button. The plan,
+  ticks, choices and results stay as they were, and Replace still works on
+  them.
+- Analyze on the same clipboard refreshes the plan and keeps the work: the
+  results of projects already replaced, the ticks of files whose status did
+  not change, and the chunk choices of files whose status and both sides did
+  not change.
+- Analyze on a different clipboard replaces the session. When at least one
+  project is not replaced yet, a dialog "Discard the current receive?" says how
+  many projects are not replaced and asks for "Discard and analyze" or
+  "Cancel". When every project is replaced or closed, the session is replaced
+  without asking.
+- A failed Analyze (an error, a cancelled or failed download) shows its error
+  and keeps the old session.
+- "Receive more", shown in the footer of step 2 once every project is done,
+  ends the session and returns to step 1.
+- Leaving the Receive tab or the page keeps the session. Restarting the app
+  ends it.
 
 ### Analyze
 
@@ -151,13 +194,17 @@ nothing is copied into that project.
 
 Projects are applied in order and a replace stops at the first project that
 fails, so the ones before it are already changed. After a failed replace
-Deptide runs Analyze again for the projects on screen, with the ignore
-patterns of the plan shown, and keeps the error visible; the tabs then show
-what is left to do.
+Deptide runs Analyze again for the projects on screen, with the folders and
+ignore patterns of the session, and keeps the error visible; the tabs then
+show what is left to do. This re-analysis never downloads again, and it keeps
+the ticks, chunk choices and results as Analyze on the same clipboard does.
 
 An applied tab turns into its result: counts of new, replaced, deleted and
 recycled files, the paths that failed validation and were left alone, and the
-copied and deleted files. Other tabs keep their plan. "Close" on the result
+copied and deleted files. A file received in part is listed under "Copied"
+with "N of M chunks" and counts as replaced. A file received in part that
+changed on either side since its preview was read is left alone and listed
+under "Changed since Analyze, not replaced. Analyze again." Other tabs keep their plan. "Close" on the result
 takes the project out of this receive, like the cross on its tab. `transfers/<stamp>-receive.json` records every replace.
 
 Paths containing `..` are rejected, so a crafted folder on the clipboard cannot
@@ -165,9 +212,17 @@ write outside the target project.
 
 ### File preview
 
-Clicking a file row opens a preview to the right of the list, inside the tab;
-when the tab is narrower than 1100px the preview sits under the list instead.
-The previewed row is highlighted. Clicking a checkbox only ticks the file. The
+Step 2 fills the height of the window: the file list and the preview scroll
+inside it. Clicking a file row opens a preview to the right of the list, inside
+the tab. A divider between the two can be dragged; with the divider focused,
+Left and Right move it by 2%, Shift with either by 10%, Home and End move it
+to the smallest and largest list, and a double-click puts it back to the
+default (32% for the list). With Alt held, Left and Right switch wizard steps
+and leave the divider alone. The list keeps at least 220px and the preview at
+least 360px. The position is remembered between launches. When the file area
+is narrower than 1100px the preview sits under the list instead, and there is
+no divider. Without an open preview the list takes the whole width. The
+previewed row is highlighted. Clicking a checkbox only ticks the file. The
 cross in the preview header closes it.
 
 The list is announced as a listbox (a tree in the tree view) whose active row
@@ -224,6 +279,42 @@ anyway, brings the notice back.
 The preview reads both files through the `read_receive_file` command, which
 rejects paths that `safe_relative` would reject during a replace. The last 20
 files read are cached per received folder and path until the next Analyze.
+
+#### Taking some changes
+
+A replaced or whitespace-only file can be received in part. Each chunk of its
+diff, a run of removed lines followed by the added lines that replace them, has
+a pill above it: "Take" or "Keep mine". A replaced file starts with every chunk
+taken, a whitespace-only file with none. "Take all" and "Keep all" in the
+preview header set every chunk. With focus anywhere in the preview, `n` and `p`
+move to the next and previous pill (the first or last one when no pill is
+focused), and Space toggles the focused pill. A screen reader hears the pill as
+"Chunk 2 of 5: Take", so the state is part of its name.
+
+The file's checkbox follows the pills: ticked when every chunk is taken,
+unticked when none is, and a dash with "2/5 chunks" in the row otherwise.
+Ticking or unticking the file, a folder above it, or a selection chip sets
+every chunk again. A file received in part is rebuilt from this machine's
+lines with the taken chunks replaced by the received lines, and keeps this
+machine's byte order mark.
+
+With "Hide whitespace changes" on, a pill sits on each visible change and
+controls every chunk of the exact diff it overlaps, showing "Mixed" when
+those differ. Chunks with only whitespace changes are hidden, and turning the
+switch on sets them to "Keep mine". A whitespace-only file opens with the
+switch on, so it shows no pills until the switch is turned off.
+
+There are no pills when either side is binary, too large to preview, not
+valid UTF-8, or when the line diff gave up (see above); a note says the file
+is received whole. Analyze again keeps the chunks picked for a file only when
+its status is the same and both of its sides are byte for byte unchanged;
+otherwise the file goes back to
+its default tick. The preview also ignores the chunks picked for a file when
+the file it reads now has other hashes than when they were picked (the file
+changed on disk and the preview read it again): the pills start from the
+default tick, and a click saves a new pick on the chunks shown. The file row
+keeps showing the old pick until then, and Replace reports such a file as
+stale instead of writing it.
 
 ## Platform note
 

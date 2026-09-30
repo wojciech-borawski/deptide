@@ -19,6 +19,7 @@ function tabId(index: number): string {
 }
 
 function moveFocus(event: KeyboardEvent, index: number): void {
+  if (event.altKey) return;
   const next = nextTabIndex(index, event.key, props.projects.length);
   const project = next === null ? undefined : props.projects[next];
   if (next === null || !project) return;
@@ -67,12 +68,25 @@ function moveFocus(event: KeyboardEvent, index: number): void {
       </button>
     </div>
   </div>
-  <div id="receive-tab-panel" role="tabpanel" :aria-labelledby="activeIndex >= 0 ? tabId(activeIndex) : undefined">
+  <div
+    id="receive-tab-panel"
+    class="tab-panel"
+    role="tabpanel"
+    :aria-labelledby="activeIndex >= 0 ? tabId(activeIndex) : undefined"
+  >
     <slot />
   </div>
 </template>
 
 <style scoped>
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .project-tabs {
   display: flex;
   flex-wrap: wrap;

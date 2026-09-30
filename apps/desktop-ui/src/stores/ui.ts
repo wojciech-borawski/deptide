@@ -28,6 +28,7 @@ interface StoredPreferences {
   receiveLayout: ReceiveLayout;
   receiveOnlyAffected: boolean;
   receiveSort: ReceiveSort;
+  receiveSplit: number;
   diffMode: DiffMode;
 }
 
@@ -45,11 +46,17 @@ const receiveSorts: readonly ReceiveSort[] = ["path", "change"];
 
 const diffModes: readonly DiffMode[] = ["unified", "split"];
 
+const receiveSplitRange = { min: 5, max: 95 };
+
 function oneOf<T extends string>(allowed: readonly T[], value: unknown, fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback;
 }
 
-function parsePreferences(raw: string): StoredPreferences {
+function inRange(value: unknown, range: { min: number; max: number }, fallback: number): number {
+  return typeof value === "number" && value >= range.min && value <= range.max ? value : fallback;
+}
+
+export function parsePreferences(raw: string): StoredPreferences {
   const defaults: StoredPreferences = {
     theme: "system",
     density: "comfortable",
@@ -59,6 +66,7 @@ function parsePreferences(raw: string): StoredPreferences {
     receiveLayout: "list",
     receiveOnlyAffected: true,
     receiveSort: "path",
+    receiveSplit: 32,
     diffMode: "unified",
   };
 
@@ -74,6 +82,7 @@ function parsePreferences(raw: string): StoredPreferences {
       receiveOnlyAffected:
         typeof parsed.receiveOnlyAffected === "boolean" ? parsed.receiveOnlyAffected : defaults.receiveOnlyAffected,
       receiveSort: oneOf(receiveSorts, parsed.receiveSort, defaults.receiveSort),
+      receiveSplit: inRange(parsed.receiveSplit, receiveSplitRange, defaults.receiveSplit),
       diffMode: oneOf(diffModes, parsed.diffMode, defaults.diffMode),
     };
   } catch {
@@ -121,6 +130,10 @@ export const useUiStore = defineStore("ui", () => {
   const receiveSort = computed({
     get: () => preferences.value.receiveSort,
     set: (value) => (preferences.value.receiveSort = value),
+  });
+  const receiveSplit = computed({
+    get: () => preferences.value.receiveSplit,
+    set: (value) => (preferences.value.receiveSplit = value),
   });
   const diffMode = computed({
     get: () => preferences.value.diffMode,
@@ -174,6 +187,7 @@ export const useUiStore = defineStore("ui", () => {
     receiveLayout,
     receiveOnlyAffected,
     receiveSort,
+    receiveSplit,
     diffMode,
     update,
     info,

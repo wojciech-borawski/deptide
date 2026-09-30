@@ -1,0 +1,15 @@
+{
+  "name": "LF file with a replaced line and a replaced line plus an added one",
+  "local": "a\nb\nc\nd\ne\n",
+  "received": "a\nB\nc\nd\nE\nf\n",
+  "chunks": [
+    { "oldStart": 1, "oldCount": 1, "newStart": 1, "newCount": 1 },
+    { "oldStart": 4, "oldCount": 1, "newStart": 4, "newCount": 2 }
+  ],
+  "cases": [
+    { "take": [], "expected": "a\nb\nc\nd\ne\n" },
+    { "take": [0], "expected": "a\nB\nc\nd\ne\n" },
+    { "take": [1], "expected": "a\nb\nc\nd\nE\nf\n" },
+    { "take": [0, 1], "expected": "a\nB\nc\nd\nE\nf\n" }
+  ]
+}

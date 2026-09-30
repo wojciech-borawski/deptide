@@ -9,10 +9,11 @@ use deptide_core::domain::{ConfiguredProject, UpdateConfig};
 use deptide_core::error::{AppError, AppResult};
 use deptide_core::transfer::{
     analyze_receive, apply_receive, apply_receive_with, collect_files, preview, suggest_target,
-    suggest_target_for, FileStatus, KnownProject, ReceiveProjectPlan, ReceiveRequest,
-    ReceiveSelection, Recycler,
+    suggest_target_for, FileMerge, FileStatus, KnownProject, LineChunk, MergedFile,
+    ReceiveProjectPlan, ReceiveRequest, ReceiveResult, ReceiveSelection, Recycler,
 };
 use deptide_core::workspace::{save_config, Workspace};
+use sha2::{Digest, Sha256};
 
 fn fill_project(root: &TempDir, base: &str) {
     root.write(
@@ -154,6 +155,7 @@ impl ReceiveSetup {
             target: "web".to_string(),
             files: strings(files),
             delete: strings(delete),
+            merges: Vec::new(),
         }
     }
 
@@ -507,6 +509,7 @@ fn receiving_classifies_files_and_copies_only_the_selection() {
             target: "web".to_string(),
             files: strings(&["src/new.ts", "src/index.ts", "../escape.txt"]),
             delete: Vec::new(),
+            merges: Vec::new(),
         }],
         &recycler,
     )
@@ -977,6 +980,7 @@ fn a_failed_project_leaves_a_journal_of_the_projects_received_before_it() {
         target: name.to_string(),
         files: strings(&[file]),
         delete: Vec::new(),
+        merges: Vec::new(),
     };
 
     let recycler = BinRecycler::new(root.path(), Some(1));
@@ -1031,4 +1035,282 @@ fn replaced_and_deleted_files_go_to_the_real_recycle_bin() {
     assert_eq!(result.projects[0].recycled, 2);
     assert_eq!(setup.read_target("deptide-test-replaced.txt"), "new\n");
     assert!(!setup.target_path("deptide-test-deleted.txt").exists());
+}
+
+fn sha256(content: &str) -> String {
+    format!("{:x}", Sha256::digest(content.as_bytes()))
+}
+
+fn chunk(old_start: usize, old_count: usize, new_start: usize, new_count: usize) -> LineChunk {
+    LineChunk {
+        old_start,
+        old_count,
+        new_start,
+        new_count,
+    }
+}
+
+const MERGE_LOCAL: &str = "\u{FEFF}a\nb\nc\nd\ne\n";
+const MERGE_RECEIVED: &str = "a\nB\nc\nd\nE\n";
+const MERGE_FIRST_TAKEN: &str = "\u{FEFF}a\nB\nc\nd\ne\n";
+
+/// Takes the first of the two chunks between `MERGE_LOCAL` and `MERGE_RECEIVED`.
+fn first_chunk_of(relative: &str) -> FileMerge {
+    FileMerge {
+        relative: relative.to_string(),
+        received_sha256: sha256(MERGE_RECEIVED),
+        local_sha256: sha256(MERGE_LOCAL),
+        total: 2,
+        chunks: vec![chunk(1, 1, 1, 1)],
+    }
+}
+
+impl ReceiveSetup {
+    fn both(&self, relative: &str) {
+        self.target(relative, MERGE_LOCAL);
+        self.incoming(relative, MERGE_RECEIVED);
+    }
+
+    fn apply_merges(
+        &self,
+        files: &[&str],
+        merges: Vec<FileMerge>,
+        recycler: &BinRecycler,
+    ) -> AppResult<ReceiveResult> {
+        apply_receive_with(
+            &self.workspace,
+            &self.config,
+            &[ReceiveSelection {
+                merges,
+                ..self.selection(files, &[])
+            }],
+            recycler,
+        )
+    }
+}
+
+#[test]
+fn a_merge_writes_the_picked_chunks_after_recycling_the_local_file() {
+    let setup = ReceiveSetup::new("transfer-merge", &[]);
+    setup.both("src/a.ts");
+    setup.incoming("src/copied.ts", "new\n");
+    setup.target("src/copied.ts", "old\n");
+
+    let recycler = setup.recycler(None);
+    let result = setup
+        .apply_merges(
+            &["src/copied.ts"],
+            vec![first_chunk_of("src/a.ts")],
+            &recycler,
+        )
+        .unwrap();
+
+    assert_eq!(setup.read_target("src/a.ts"), MERGE_FIRST_TAKEN);
+    let mut batches = recycler.batches();
+    assert_eq!(batches.len(), 1, "merged and copied files go in one batch");
+    batches[0].sort();
+    assert_eq!(
+        batches[0],
+        vec!["repos/web/src/a.ts", "repos/web/src/copied.ts"]
+    );
+    assert_eq!(
+        fs::read_to_string(setup.root.join("bin/repos/web/src/a.ts")).unwrap(),
+        MERGE_LOCAL,
+        "the bin holds the version from before the merge"
+    );
+
+    let project = &result.projects[0];
+    assert_eq!(
+        (project.added, project.replaced, project.recycled),
+        (0, 2, 2)
+    );
+    assert_eq!(project.files, vec!["src/copied.ts", "src/a.ts"]);
+    assert_eq!(
+        project.merged,
+        vec![MergedFile {
+            relative: "src/a.ts".to_string(),
+            taken: 1,
+            total: 2,
+            chunks: vec![chunk(1, 1, 1, 1)],
+        }]
+    );
+    assert_eq!(project.bytes, 4 + MERGE_FIRST_TAKEN.len() as u64);
+    assert!(project.stale.is_empty());
+    assert!(project.skipped.is_empty());
+
+    let journal: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(result.log_file.unwrap()).unwrap()).unwrap();
+    assert_eq!(
+        journal["projects"][0]["merged"],
+        serde_json::json!([{
+            "relative": "src/a.ts",
+            "taken": 1,
+            "total": 2,
+            "chunks": [{ "oldStart": 1, "oldCount": 1, "newStart": 1, "newCount": 1 }],
+        }])
+    );
+}
+
+#[test]
+fn a_file_in_both_merges_and_files_is_merged_not_copied() {
+    let setup = ReceiveSetup::new("transfer-merge-wins", &[]);
+    setup.both("a.ts");
+
+    let recycler = setup.recycler(None);
+    let result = setup
+        .apply_merges(&["a.ts"], vec![first_chunk_of("a.ts")], &recycler)
+        .unwrap();
+
+    assert_eq!(setup.read_target("a.ts"), MERGE_FIRST_TAKEN);
+    assert_eq!(recycler.batches(), vec![vec!["repos/web/a.ts"]]);
+    let project = &result.projects[0];
+    assert_eq!(project.files, vec!["a.ts"]);
+    assert_eq!(project.replaced, 1);
+    assert_eq!(project.merged.len(), 1);
+}
+
+#[test]
+fn a_merge_whose_files_changed_since_analyze_is_stale_and_left_alone() {
+    let setup = ReceiveSetup::new("transfer-merge-stale", &[]);
+    setup.both("local-changed.ts");
+    setup.both("received-changed.ts");
+    setup.both("also-in-files.ts");
+    setup.incoming("local-gone.ts", MERGE_RECEIVED);
+    setup.target("received-gone.ts", MERGE_LOCAL);
+    let local_changed = |relative: &str| FileMerge {
+        local_sha256: sha256("a\nb\nc\nd\ne\n"),
+        ..first_chunk_of(relative)
+    };
+
+    let recycler = setup.recycler(None);
+    let result = setup
+        .apply_merges(
+            &["also-in-files.ts"],
+            vec![
+                local_changed("local-changed.ts"),
+                FileMerge {
+                    received_sha256: sha256(MERGE_LOCAL),
+                    ..first_chunk_of("received-changed.ts")
+                },
+                local_changed("also-in-files.ts"),
+                first_chunk_of("local-gone.ts"),
+                first_chunk_of("received-gone.ts"),
+            ],
+            &recycler,
+        )
+        .unwrap();
+
+    let project = &result.projects[0];
+    assert_eq!(
+        project.stale,
+        vec![
+            "local-changed.ts",
+            "received-changed.ts",
+            "also-in-files.ts",
+            "local-gone.ts",
+            "received-gone.ts",
+        ]
+    );
+    assert!(recycler.batches().is_empty(), "nothing recycled");
+    for relative in [
+        "local-changed.ts",
+        "received-changed.ts",
+        "also-in-files.ts",
+        "received-gone.ts",
+    ] {
+        assert_eq!(setup.read_target(relative), MERGE_LOCAL, "{relative}");
+    }
+    assert!(
+        !setup.target_path("local-gone.ts").exists(),
+        "a stale merge is not copied instead"
+    );
+    assert!(project.files.is_empty());
+    assert!(project.merged.is_empty());
+    assert!(project.skipped.is_empty());
+    assert_eq!((project.replaced, project.recycled), (0, 0));
+}
+
+#[test]
+fn a_merge_with_bad_ranges_or_path_is_skipped_and_left_alone() {
+    let setup = ReceiveSetup::new("transfer-merge-invalid", &[]);
+    for relative in [
+        "past-end.ts",
+        "overlap.ts",
+        "more-than-total.ts",
+        "twice.ts",
+    ] {
+        setup.both(relative);
+    }
+    setup.root.write("incoming/escape.ts", MERGE_RECEIVED);
+    setup.root.write("repos/escape.ts", MERGE_LOCAL);
+
+    let recycler = setup.recycler(None);
+    let result = setup
+        .apply_merges(
+            &[],
+            vec![
+                FileMerge {
+                    chunks: vec![chunk(5, 1, 5, 1)],
+                    ..first_chunk_of("past-end.ts")
+                },
+                FileMerge {
+                    chunks: vec![chunk(1, 2, 1, 2), chunk(2, 1, 4, 1)],
+                    ..first_chunk_of("overlap.ts")
+                },
+                FileMerge {
+                    total: 0,
+                    ..first_chunk_of("more-than-total.ts")
+                },
+                first_chunk_of("../escape.ts"),
+                first_chunk_of("twice.ts"),
+                FileMerge {
+                    chunks: vec![],
+                    ..first_chunk_of("twice.ts")
+                },
+            ],
+            &recycler,
+        )
+        .unwrap();
+
+    let project = &result.projects[0];
+    assert_eq!(
+        project.skipped,
+        vec![
+            "past-end.ts",
+            "overlap.ts",
+            "more-than-total.ts",
+            "../escape.ts",
+            "twice.ts",
+        ]
+    );
+    for relative in ["past-end.ts", "overlap.ts", "more-than-total.ts"] {
+        assert_eq!(setup.read_target(relative), MERGE_LOCAL, "{relative}");
+    }
+    assert_eq!(
+        fs::read_to_string(setup.root.join("repos/escape.ts")).unwrap(),
+        MERGE_LOCAL
+    );
+    assert_eq!(
+        setup.read_target("twice.ts"),
+        MERGE_FIRST_TAKEN,
+        "the first entry for a path is applied, later ones are skipped"
+    );
+    assert_eq!(recycler.batches(), vec![vec!["repos/web/twice.ts"]]);
+    assert!(project.stale.is_empty());
+    assert_eq!(project.merged.len(), 1);
+}
+
+#[test]
+fn a_failed_recycle_leaves_merged_files_untouched() {
+    let setup = ReceiveSetup::new("transfer-merge-bin-full", &[]);
+    setup.both("a.ts");
+
+    let recycler = setup.recycler(Some(0));
+    let error = setup
+        .apply_merges(&[], vec![first_chunk_of("a.ts")], &recycler)
+        .unwrap_err();
+
+    assert!(error.message().contains("the bin is full"), "{error}");
+    assert_eq!(recycler.batches(), vec![vec!["repos/web/a.ts"]]);
+    assert_eq!(setup.read_target("a.ts"), MERGE_LOCAL);
 }

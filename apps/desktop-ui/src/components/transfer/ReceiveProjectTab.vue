@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 
 import type { ReceiveProjectPlan } from "@/api/types";
 import ActionButton from "@/components/ui/ActionButton.vue";
+import SplitPane from "@/components/ui/SplitPane.vue";
 import { visibleFiles, type SelectionMode } from "@/lib/receive-view";
 import { useTransferStore } from "@/stores/transfer";
 import { useUiStore, type ReceiveLayout } from "@/stores/ui";
@@ -52,7 +53,7 @@ function setOnlyAffected(event: Event): void {
 </script>
 
 <template>
-  <div class="stack">
+  <div class="stack project">
     <div class="toolbar">
       <button
         v-for="entry in selectionModes"
@@ -104,19 +105,19 @@ function setOnlyAffected(event: Event): void {
     </div>
 
     <div class="frame">
-      <div ref="content" class="content" :class="{ previewing: previewed }">
-        <div ref="filesPane" class="files">
-          <p v-if="!files.length" class="muted small">{{ t("transfer.nothingVisible") }}</p>
-          <ReceiveFileTree v-else-if="ui.receiveLayout === 'tree'" :source="props.project.source" :files="files" />
-          <ReceiveFileList v-else :source="props.project.source" :files="files" :sort="ui.receiveSort" />
-        </div>
-        <FilePreview
-          v-if="previewed"
-          class="preview"
-          :source="props.project.source"
-          :file="previewed"
-          @close="closePreview"
-        />
+      <div ref="content" class="content">
+        <SplitPane v-model="ui.receiveSplit" :label="t('transfer.resizePreview')" :stack-below="1100">
+          <template #start>
+            <div ref="filesPane" class="files">
+              <p v-if="!files.length" class="muted small">{{ t("transfer.nothingVisible") }}</p>
+              <ReceiveFileTree v-else-if="ui.receiveLayout === 'tree'" :source="props.project.source" :files="files" />
+              <ReceiveFileList v-else :source="props.project.source" :files="files" :sort="ui.receiveSort" />
+            </div>
+          </template>
+          <template v-if="previewed" #end>
+            <FilePreview class="preview" :source="props.project.source" :file="previewed" @close="closePreview" />
+          </template>
+        </SplitPane>
       </div>
     </div>
   </div>
@@ -153,50 +154,34 @@ function setOnlyAffected(event: Event): void {
   font-size: 12px;
 }
 
+.project {
+  flex: 1;
+  min-height: 0;
+}
+
 .frame {
   container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 280px;
 }
 
 .content {
   display: flex;
-  gap: 14px;
+  flex: 1;
   min-height: 0;
 }
 
 .files {
   flex: 1 1 0;
   min-width: 0;
-  max-height: 460px;
+  min-height: 0;
   overflow: auto;
-}
-
-.content.previewing {
-  height: min(72vh, 760px);
-}
-
-.content.previewing .files {
-  flex: 0 1 400px;
-  max-height: none;
 }
 
 .preview {
   flex: 1 1 0;
-}
-
-@container (max-width: 1100px) {
-  .content.previewing {
-    flex-direction: column;
-    height: auto;
-  }
-
-  .content.previewing .files {
-    flex: none;
-    max-height: 280px;
-  }
-
-  .preview {
-    flex: none;
-    max-height: 72vh;
-  }
+  min-height: 0;
 }
 </style>

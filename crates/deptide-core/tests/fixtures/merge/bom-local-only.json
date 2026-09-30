@@ -1,0 +1,10 @@
+{
+  "name": "Only this machine's file has a BOM, and the output keeps it",
+  "local": "﻿x\ny\nz\n",
+  "received": "x\nY\nz\n",
+  "chunks": [{ "oldStart": 1, "oldCount": 1, "newStart": 1, "newCount": 1 }],
+  "cases": [
+    { "take": [], "expected": "﻿x\ny\nz\n" },
+    { "take": [0], "expected": "﻿x\nY\nz\n" }
+  ]
+}

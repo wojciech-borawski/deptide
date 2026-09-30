@@ -1,0 +1,10 @@
+{
+  "name": "Lines appended after a last line that had no break",
+  "local": "keep\nlast",
+  "received": "keep\nlast\nmore\nend",
+  "chunks": [{ "oldStart": 1, "oldCount": 1, "newStart": 1, "newCount": 3 }],
+  "cases": [
+    { "take": [], "expected": "keep\nlast" },
+    { "take": [0], "expected": "keep\nlast\nmore\nend" }
+  ]
+}

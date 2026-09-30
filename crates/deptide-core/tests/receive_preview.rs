@@ -6,6 +6,7 @@ use common::TempDir;
 use deptide_core::domain::{ConfiguredProject, UpdateConfig};
 use deptide_core::transfer::{read_receive_file, FileSide, ReceiveFileContents, PREVIEW_LIMIT};
 use deptide_core::workspace::Workspace;
+use sha2::{Digest, Sha256};
 
 /// A workspace with one project `web` in `repos/web` and a received copy of
 /// it in `incoming/web`.
@@ -59,11 +60,15 @@ impl PreviewSetup {
     }
 }
 
+/// A text side whose raw bytes are `text`, after a BOM when `bom` is set.
 fn text(text: &str, bom: bool, size: u64) -> Option<FileSide> {
+    let raw = [if bom { "\u{FEFF}" } else { "" }, text].concat();
     Some(FileSide::Text {
         text: text.to_string(),
         bom,
         size,
+        sha256: format!("{:x}", Sha256::digest(raw.as_bytes())),
+        utf8: true,
     })
 }
 
@@ -80,13 +85,55 @@ fn both_sides_are_read_as_text_with_the_bom_stripped_and_reported() {
 }
 
 #[test]
+fn the_hash_covers_the_whole_file_with_its_bom() {
+    let setup = PreviewSetup::new("preview-hash");
+    setup.incoming("abc.txt", b"abc");
+    setup.target("abc.txt", b"\xEF\xBB\xBFabc");
+
+    let contents = setup.read("abc.txt").unwrap();
+
+    let Some(FileSide::Text { sha256, .. }) = &contents.received else {
+        panic!("{contents:?}");
+    };
+    assert_eq!(
+        sha256,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    let Some(FileSide::Text { sha256, .. }) = &contents.local else {
+        panic!("{contents:?}");
+    };
+    assert_eq!(
+        sha256,
+        "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c"
+    );
+}
+
+#[test]
 fn invalid_utf8_is_decoded_with_replacement_characters() {
     let setup = PreviewSetup::new("preview-lossy");
     setup.incoming("latin1.txt", b"caf\xE9\n");
+    setup.target("latin1.txt", b"\xEF\xBB\xBFcaf\xE9\n");
 
     let contents = setup.read("latin1.txt").unwrap();
 
-    assert_eq!(contents.received, text("caf\u{FFFD}\n", false, 5));
+    assert_eq!(
+        contents.received,
+        Some(FileSide::Text {
+            text: "caf\u{FFFD}\n".to_string(),
+            bom: false,
+            size: 5,
+            sha256: format!("{:x}", Sha256::digest(b"caf\xE9\n")),
+            utf8: false,
+        })
+    );
+    assert!(matches!(
+        contents.local,
+        Some(FileSide::Text {
+            bom: true,
+            utf8: false,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -228,7 +275,14 @@ fn file_sides_serialize_with_a_kind_tag() {
     assert_eq!(
         json,
         serde_json::json!({
-            "received": { "kind": "text", "text": "a", "bom": true, "size": 4 },
+            "received": {
+                "kind": "text",
+                "text": "a",
+                "bom": true,
+                "size": 4,
+                "sha256": "1951c7860e968e742658b3af34e60741eb4aaf2a8d2ecc3993727016b12e81e8",
+                "utf8": true,
+            },
             "local": { "kind": "tooLarge", "size": 9 },
         })
     );

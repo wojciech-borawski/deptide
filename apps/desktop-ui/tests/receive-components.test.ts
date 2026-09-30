@@ -9,6 +9,7 @@ vi.mock("@/router", () => ({ routeNames: { settings: "settings" } }));
 import IgnorePatternChips from "@/components/transfer/IgnorePatternChips.vue";
 import ReceiveFileList from "@/components/transfer/ReceiveFileList.vue";
 import ReceiveFileTree from "@/components/transfer/ReceiveFileTree.vue";
+import ReceiveResult from "@/components/transfer/ReceiveResult.vue";
 import ReceiveTabs from "@/components/transfer/ReceiveTabs.vue";
 import { i18n } from "@/i18n";
 import { useTransferStore } from "@/stores/transfer";
@@ -324,5 +325,114 @@ describe("file list keyboard", () => {
     await nextTick();
     expect(cursorRow()).toBe("b.ts");
     expect(transfer.previewFor(source)).toBe("b.ts");
+  });
+});
+
+describe("chunk choices in the file list", () => {
+  const source = "C:\\clip\\web";
+  const files = [file("src/a.ts", "replaced"), file("b.ts", "added")];
+  const chunks = [
+    { oldStart: 0, oldCount: 1, newStart: 0, newCount: 1 },
+    { oldStart: 3, oldCount: 1, newStart: 3, newCount: 1 },
+    { oldStart: 6, oldCount: 1, newStart: 6, newCount: 1 },
+  ];
+  let mounted: Mounted | undefined;
+
+  afterEach(() => mounted?.unmount());
+
+  function show(component: Component, props: Record<string, unknown>): ReturnType<typeof useTransferStore> {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useTransferStore();
+    store.plan = { projects: [makeProject(source, "web", files)] };
+    store.setFiles(source, ["src/a.ts", "b.ts"], true);
+    store.setChunks(source, "src/a.ts", { receivedSha256: "r", localSha256: "l", chunks }, [1], false);
+    mounted = mount(
+      component,
+      (app) => {
+        app.use(pinia);
+        app.use(i18n);
+      },
+      props,
+    );
+    return store;
+  }
+
+  function checkboxFor(label: string): TestNode {
+    const found = findAll(mounted?.root as TestNode, "input").find((node) => node.props["aria-label"] === label);
+    if (!found) throw new Error(`no checkbox ${label}`);
+    return found;
+  }
+
+  it("shows a mixed file as a mixed checkbox with the count of chunks taken", () => {
+    show(ReceiveFileList, { source, files, sort: "path" });
+    const box = checkboxFor("src/a.ts");
+
+    expect(box.props.indeterminate).toBe(true);
+    expect(box.props.checked).toBe(false);
+    expect(box.props["aria-checked"]).toBe("mixed");
+    expect(checkboxFor("b.ts").props.indeterminate).toBe(false);
+    expect(textOf(mounted?.root as TestNode)).toContain("2/3 chunks");
+  });
+
+  it("takes the whole file when a mixed checkbox is clicked", async () => {
+    const store = show(ReceiveFileList, { source, files, sort: "path" });
+
+    dispatch(checkboxFor("src/a.ts"), "change");
+    await nextTick();
+
+    expect(store.fileState(source, "src/a.ts")).toBe("checked");
+    expect(checkboxFor("src/a.ts").props.indeterminate).toBe(false);
+    expect(textOf(mounted?.root as TestNode)).not.toContain("chunks");
+  });
+
+  it("shows a dash on a folder whose only file is mixed", async () => {
+    const store = show(ReceiveFileTree, { source, files });
+    store.toggleFolder(source, "src");
+    await nextTick();
+
+    expect(checkboxFor("src").props.indeterminate).toBe(true);
+
+    dispatch(checkboxFor("src"), "change");
+    await nextTick();
+
+    expect(store.fileState(source, "src/a.ts")).toBe("checked");
+    expect(checkboxFor("src").props.indeterminate).toBe(false);
+    expect(checkboxFor("src").props.checked).toBe(true);
+  });
+});
+
+describe("ReceiveResult", () => {
+  const received = {
+    receivedAt: "2026-09-28T10:00:00Z",
+    logFile: null,
+    result: {
+      target: "web",
+      targetDirectory: "C:\\repos\\web",
+      added: 0,
+      replaced: 2,
+      deleted: 0,
+      recycled: 2,
+      bytes: 10,
+      files: ["src/a.ts", "src/b.ts"],
+      deletedFiles: [],
+      skipped: [],
+      merged: [{ relative: "src/a.ts", taken: 3, total: 5, chunks: [] }],
+      stale: ["src/c.ts"],
+    },
+  };
+
+  it("shows how many chunks of a merged file were taken", async () => {
+    const html = await render(ReceiveResult, { received });
+
+    expect(html).toContain("3 of 5 chunks");
+    expect(html.match(/of \d+ chunks/g)).toHaveLength(1);
+  });
+
+  it("lists the files left alone because they changed since Analyze", async () => {
+    const html = await render(ReceiveResult, { received });
+
+    expect(html).toContain("Changed since Analyze, not replaced. Analyze again.");
+    expect(html).toContain("src/c.ts");
   });
 });

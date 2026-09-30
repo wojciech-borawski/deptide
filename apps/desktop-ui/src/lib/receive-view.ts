@@ -167,7 +167,13 @@ export function buildTree(files: readonly ReceiveFile[]): TreeNode[] {
   return roots;
 }
 
-export function checkState(paths: readonly string[], selected: ReadonlySet<string>): CheckState {
+/** `mixed` holds files with only some chunks taken; any of them below makes the state indeterminate. */
+export function checkState(
+  paths: readonly string[],
+  selected: ReadonlySet<string>,
+  mixed: ReadonlySet<string> = new Set(),
+): CheckState {
+  if (paths.some((path) => mixed.has(path))) return "indeterminate";
   const ticked = paths.filter((path) => selected.has(path)).length;
   if (ticked === 0) return "unchecked";
   return ticked === paths.length ? "checked" : "indeterminate";

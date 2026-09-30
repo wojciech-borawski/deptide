@@ -1,65 +1,58 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useEventListener } from "@vueuse/core";
 import { useI18n } from "vue-i18n";
 
-import type { ClipboardEntry } from "@/api/types";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import ActionButton from "@/components/ui/ActionButton.vue";
 import NoticeBanner from "@/components/ui/NoticeBanner.vue";
-import ProgressBar from "@/components/ui/ProgressBar.vue";
-import { downloadPercent } from "@/lib/clipboard-download";
-import { formatBytes } from "@/lib/format";
+import StepperHeader from "@/components/ui/StepperHeader.vue";
 import type { RemovalGroup } from "@/lib/receive-view";
-import { useTransferStore } from "@/stores/transfer";
+import { useTransferStore, type ReceiveStep } from "@/stores/transfer";
 import { useWorkspaceStore } from "@/stores/workspace";
 import DeleteConfirmDialog from "./DeleteConfirmDialog.vue";
-import IgnorePatternChips from "./IgnorePatternChips.vue";
-import ReceiveProjectTab from "./ReceiveProjectTab.vue";
-import ReceiveResult from "./ReceiveResult.vue";
-import ReceiveTabs from "./ReceiveTabs.vue";
+import DiscardSessionDialog from "./DiscardSessionDialog.vue";
+import ReceiveClipboardStep from "./ReceiveClipboardStep.vue";
+import ReceiveReviewStep from "./ReceiveReviewStep.vue";
 
 interface PendingReplace {
   source: string | undefined;
   groups: RemovalGroup[];
 }
 
+const receiveSteps: ReceiveStep[] = ["clipboard", "review"];
+
 const workspace = useWorkspaceStore();
 const transfer = useTransferStore();
 const { t } = useI18n();
 
 const pending = ref<PendingReplace | null>(null);
+const confirmingDiscard = ref(false);
 
-const projectNames = computed(() =>
-  workspace.projects.filter((project) => project.exists).map((project) => project.name),
+const steps = computed(() =>
+  receiveSteps.map((key) => ({
+    title: t(`transfer.receiveSteps.${key}.title`),
+    hint: t(`transfer.receiveSteps.${key}.hint`),
+  })),
 );
-const globalPatterns = computed(() => workspace.config?.transferIgnore ?? []);
+const stepIndex = computed(() => receiveSteps.indexOf(transfer.receiveStep));
+const onClipboardStep = computed(() => transfer.receiveStep === "clipboard");
 const canAnalyze = computed(() => transfer.requests.length > 0 && !transfer.receiveBusy);
-const activeProject = computed(() => transfer.tabs.find((project) => project.source === transfer.activeSource));
-const activeResult = computed(() => (transfer.activeSource ? transfer.results[transfer.activeSource] : undefined));
-const doneSources = computed(() => Object.keys(transfer.results));
-const rejected = computed(() => transfer.clipboard.rejected);
-const showSource = computed(
-  () => transfer.clipboard.source !== "empty" || rejected.value > 0 || transfer.clipboardBusy,
-);
-const percent = computed(() => (transfer.downloadProgress ? downloadPercent(transfer.downloadProgress) : null));
-const progressText = computed(() => {
-  const progress = transfer.downloadProgress;
-  if (!progress) return "";
-  const files = t("transfer.downloadFiles", { done: progress.filesDone, total: progress.filesTotal });
-  const bytes =
-    progress.bytesTotal === null
-      ? formatBytes(progress.bytesDone)
-      : t("transfer.downloadBytes", { done: formatBytes(progress.bytesDone), total: formatBytes(progress.bytesTotal) });
-  return `${files} · ${bytes}`;
-});
+const allDone = computed(() => transfer.hasSession && transfer.pendingCount === 0);
 
-function entrySize(entry: ClipboardEntry): string {
-  const files = t("transfer.entryFiles", { count: entry.files ?? 0 }, entry.files ?? 0);
-  return entry.bytes === null ? files : `${files} · ${formatBytes(entry.bytes)}`;
+function selectStep(index: number): void {
+  const step = receiveSteps[index];
+  if (step) transfer.setReceiveStep(step);
 }
 
-function closeActive(): void {
-  if (transfer.activeSource) transfer.closeProject(transfer.activeSource);
+function analyze(): void {
+  if (transfer.clipboardChanged && transfer.pendingCount > 0) confirmingDiscard.value = true;
+  else void transfer.analyze(workspace.root);
+}
+
+function confirmDiscard(): void {
+  confirmingDiscard.value = false;
+  void transfer.analyze(workspace.root);
 }
 
 function replace(source?: string): void {
@@ -74,151 +67,72 @@ function confirmReplace(): void {
   void transfer.apply(workspace.root, source);
 }
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  return element?.tagName === "TEXTAREA" || element?.isContentEditable === true;
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (!event.altKey || isTypingTarget(event.target)) return;
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    transfer.setReceiveStep("clipboard");
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    transfer.setReceiveStep("review");
+  }
+}
+
 onMounted(() => transfer.startWatching(workspace.root));
 onBeforeUnmount(() => transfer.stopWatching());
+useEventListener(window, "keydown", onKeydown);
 </script>
 
 <template>
-  <div class="stack">
-    <p class="muted">{{ t("transfer.receiveIntro") }}</p>
-
-    <section class="card stack">
-      <div class="card-title">
-        <h3>{{ t("transfer.found") }}</h3>
-        <span class="row muted"><span class="spinner" /> {{ t("transfer.watching") }}</span>
-      </div>
-
-      <div v-if="showSource" class="clipboard-source small">
-        <p v-if="transfer.clipboard.source === 'paths'">{{ t("transfer.sourcePaths") }}</p>
-        <p v-else-if="transfer.clipboard.source === 'virtual' && transfer.download">
-          <i18n-t keypath="transfer.sourceDownloaded" tag="span">
-            <template #folder
-              ><span class="mono selectable">{{ transfer.download.directory }}</span></template
-            >
-          </i18n-t>
-        </p>
-        <p v-else-if="transfer.clipboard.source === 'virtual'">{{ t("transfer.sourceRemote") }}</p>
-        <p v-else-if="transfer.clipboard.source === 'unreadable'" class="muted selectable">
-          {{ transfer.clipboard.problem ?? t("transfer.sourceUnreadable") }}
-        </p>
-        <p v-if="rejected > 0" class="muted">{{ t("transfer.rejected", { count: rejected }, rejected) }}</p>
-        <p v-if="transfer.clipboardBusy" class="muted">{{ t("transfer.sourceBusy") }}</p>
-      </div>
-
-      <p v-if="!transfer.entries.length" class="muted">{{ t("transfer.nothing") }}</p>
-
-      <div v-else class="list">
-        <div v-for="entry in transfer.entries" :key="entry.path" class="list-row entry">
-          <AppIcon name="folder" :size="16" />
-          <span class="details">
-            <span class="row">
-              <span class="name">{{ entry.name }}</span>
-              <span v-if="entry.files !== null" class="muted small">{{ entrySize(entry) }}</span>
-              <span v-if="entry.packageName" class="badge badge-violet mono">{{ entry.packageName }}</span>
-              <span v-if="!entry.isProject" class="badge badge-warn">{{ t("transfer.notProject") }}</span>
-            </span>
-            <span v-if="transfer.folderFor(entry.path)" class="mono muted truncate selectable">{{
-              transfer.folderFor(entry.path)
-            }}</span>
-          </span>
-          <label class="target">
-            <span class="muted small">{{ t("transfer.target") }}</span>
-            <select
-              class="select"
-              :value="transfer.targets[entry.path] ?? ''"
-              :disabled="transfer.downloading"
-              @change="transfer.setTarget(entry.path, ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">{{ t("transfer.noTarget") }}</option>
-              <option v-for="name in projectNames" :key="name" :value="name">{{ name }}</option>
-            </select>
-          </label>
-        </div>
-      </div>
-
-      <IgnorePatternChips
-        :patterns="globalPatterns"
-        :disabled="transfer.receiveDisabled"
-        :busy="transfer.receiveBusy"
-        @toggle="transfer.toggleReceivePattern(workspace.root, $event)"
+  <div class="receive">
+    <div class="stepper-bar">
+      <StepperHeader
+        :steps="steps"
+        :current="stepIndex"
+        :reachable="transfer.hasSession ? receiveSteps.length - 1 : -1"
+        @select="selectStep"
       />
-
-      <div class="field">
-        <label>{{ t("transfer.ignoreRun") }}</label>
-        <textarea v-model="transfer.receivePatterns" class="textarea mono" rows="2" placeholder="*.local"></textarea>
-      </div>
-
-      <div class="toolbar">
-        <ActionButton
-          variant="primary"
-          icon="search"
-          :busy="transfer.receiveBusy"
-          :disabled="!canAnalyze"
-          @click="transfer.analyze(workspace.root)"
-        >
-          {{ t("transfer.analyze") }}
-        </ActionButton>
-      </div>
-
-      <div v-if="transfer.downloadShown" class="download">
-        <div class="row">
-          <span class="grow">{{ t("transfer.downloading") }}</span>
-          <span v-if="progressText" class="muted small">{{ progressText }}</span>
-          <ActionButton small icon="close" @click="transfer.cancelDownload()">{{ t("common.cancel") }}</ActionButton>
-        </div>
-        <ProgressBar class="download-bar" :percent="percent ?? 0" :done="false" :indeterminate="percent === null" />
-      </div>
-    </section>
+    </div>
 
     <NoticeBanner v-if="transfer.receiveError" tone="error" selectable>{{ transfer.receiveError }}</NoticeBanner>
 
-    <section v-if="transfer.plan && transfer.plan.projects.length" class="card stack">
-      <div class="card-title">
-        <h3>{{ t("transfer.planTitle") }}</h3>
-        <ActionButton
-          v-if="transfer.tabs.length"
-          variant="primary"
-          small
-          :busy="transfer.receiveBusy"
-          :disabled="transfer.selectedCount === 0"
-          @click="replace()"
-        >
-          {{ t("transfer.replaceAll", { count: transfer.selectedCount }) }}
-        </ActionButton>
-      </div>
+    <div class="step">
+      <ReceiveClipboardStep v-if="onClipboardStep" />
+      <ReceiveReviewStep v-else @replace="replace" />
+    </div>
 
-      <details v-if="transfer.unchangedProjects.length" class="unchanged">
-        <summary>
-          <AppIcon name="chevronRight" :size="14" class="chevron" />
-          {{ t("transfer.noChanges", { projects: t("common.project", transfer.unchangedProjects.length) }) }}
-        </summary>
-        <ul>
-          <li v-for="project in transfer.unchangedProjects" :key="project.source">
-            <strong>{{ project.target }}</strong>
-            <span class="mono muted small source">{{ project.source }}</span>
-          </li>
-        </ul>
-      </details>
+    <footer class="footer">
+      <button class="btn" type="button" :disabled="onClipboardStep" @click="transfer.setReceiveStep('clipboard')">
+        <AppIcon name="chevronLeft" :size="16" />
+        {{ t("common.back") }}
+      </button>
+      <span class="hint faint">{{ t("transfer.receiveKeyboardHint") }}</span>
+      <ActionButton
+        v-if="onClipboardStep"
+        variant="primary"
+        icon="search"
+        :busy="transfer.receiveBusy"
+        :disabled="!canAnalyze"
+        @click="analyze"
+      >
+        {{ t("transfer.analyze") }}
+      </ActionButton>
+      <ActionButton v-else-if="allDone" variant="primary" icon="refresh" @click="transfer.endSession()">
+        {{ t("transfer.receiveMore") }}
+      </ActionButton>
+    </footer>
 
-      <template v-if="transfer.tabs.length">
-        <ReceiveTabs
-          :projects="transfer.tabs"
-          :active="transfer.activeSource"
-          :done="doneSources"
-          @select="transfer.setActive"
-          @close="transfer.closeProject"
-        >
-          <ReceiveResult v-if="activeResult" :received="activeResult" @close="closeActive" />
-          <ReceiveProjectTab
-            v-else-if="activeProject"
-            :key="activeProject.source"
-            :project="activeProject"
-            @replace="replace(activeProject.source)"
-          />
-        </ReceiveTabs>
-      </template>
-    </section>
-
+    <DiscardSessionDialog
+      :open="confirmingDiscard"
+      :count="transfer.pendingCount"
+      @cancel="confirmingDiscard = false"
+      @confirm="confirmDiscard"
+    />
     <DeleteConfirmDialog
       :open="pending !== null"
       :groups="pending?.groups ?? []"
@@ -229,87 +143,38 @@ onBeforeUnmount(() => transfer.stopWatching());
 </template>
 
 <style scoped>
-.entry {
-  flex-wrap: wrap;
-}
-
-.details {
+.receive {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  flex: 1 1 260px;
-}
-
-.name {
-  font-weight: 600;
-}
-
-.target {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 220px;
-}
-
-.small {
-  font-size: 12px;
-}
-
-.clipboard-source {
-  display: grid;
-  gap: 2px;
-}
-
-.clipboard-source p {
-  margin: 0;
-}
-
-.download {
-  display: grid;
-  gap: 8px;
-}
-
-.download .grow {
+  gap: 14px;
   flex: 1;
+  min-height: 0;
 }
 
-.download-bar {
-  height: 6px;
-  border-radius: 3px;
+.stepper-bar {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
 }
 
-.unchanged summary {
-  display: inline-flex;
+.step {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.footer {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  color: var(--text-muted);
+  gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.hint {
+  flex: 1;
   font-size: 13px;
-  user-select: none;
-  list-style: none;
-}
-
-.unchanged summary::-webkit-details-marker {
-  display: none;
-}
-
-.unchanged .chevron {
-  transition: transform 0.1s ease;
-}
-
-.unchanged[open] .chevron {
-  transform: rotate(90deg);
-}
-
-.unchanged .source {
-  margin-left: 8px;
-}
-
-.unchanged ul {
-  margin: 8px 0 0;
-  padding-left: 26px;
-  display: grid;
-  gap: 4px;
-  font-size: 13px;
+  min-width: 0;
 }
 </style>

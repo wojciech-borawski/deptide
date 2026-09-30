@@ -36,7 +36,7 @@ export function useFileCursor(
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.target !== event.currentTarget) return;
+    if (event.target !== event.currentTarget || event.altKey) return;
     const next = fileListKey(
       event.key,
       order(),

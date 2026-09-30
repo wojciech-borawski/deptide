@@ -1,0 +1,10 @@
+{
+  "name": "The received file is empty",
+  "local": "a\nb\n",
+  "received": "",
+  "chunks": [{ "oldStart": 0, "oldCount": 2, "newStart": 0, "newCount": 0 }],
+  "cases": [
+    { "take": [], "expected": "a\nb\n" },
+    { "take": [0], "expected": "" }
+  ]
+}

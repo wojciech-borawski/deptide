@@ -45,6 +45,7 @@ describe("translations", () => {
       "transfer.filePreview.unchangedLines",
       "transfer.rejected",
       "transfer.entryFiles",
+      "transfer.discardText",
     ]) {
       expect(read(en, key).split("|").length).toBe(2);
       expect(read(de, key).split("|").length).toBe(2);

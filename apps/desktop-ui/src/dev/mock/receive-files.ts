@@ -305,11 +305,26 @@ const pairs: Record<string, MockPair> = {
   },
 };
 
+/** A stand-in for SHA-256: stable per content, 64 hex digits. */
+function fakeSha256(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193) >>> 0;
+  }
+  let digits = "";
+  for (let round = 0; round < 8; round += 1) {
+    hash = Math.imul(hash ^ round, 0x01000193) >>> 0;
+    digits += hash.toString(16).padStart(8, "0");
+  }
+  return digits;
+}
+
 function toSide(value: string | FileSide | null): FileSide | null {
   if (value === null || typeof value !== "string") return value;
   const bom = value.startsWith(byteOrderMark);
   const text = bom ? value.slice(1) : value;
-  return { kind: "text", text, bom, size: new TextEncoder().encode(value).length };
+  const size = new TextEncoder().encode(value).length;
+  return { kind: "text", text, bom, size, sha256: fakeSha256(value), utf8: true };
 }
 
 function generated(relative: string, status: FileStatus): MockPair {

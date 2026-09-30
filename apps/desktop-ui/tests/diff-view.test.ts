@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import type { LineChunk } from "@/api/types";
 import {
+  changeRuns,
+  chunksOf,
+  chunksOverlapping,
   diffTexts,
   hasChanges,
+  lineDiff,
   languageFor,
   splitLines,
   rowCount,
@@ -406,5 +411,103 @@ describe("languageFor", () => {
 
   it.each(["Makefile", "a.txt", "a.d", ".gitignore", "folder.ts/readme", "a.ts.bak"])("%s is plain text", (path) => {
     expect(languageFor(path)).toBeNull();
+  });
+});
+
+interface MergeFixture {
+  name: string;
+  local: string;
+  received: string;
+  chunks: LineChunk[];
+}
+
+const mergeFixtures = import.meta.glob<MergeFixture>("../../../crates/deptide-core/tests/fixtures/merge/*.json", {
+  eager: true,
+  import: "default",
+});
+
+function withoutBom(value: string): string {
+  return value.startsWith("﻿") ? value.slice(1) : value;
+}
+
+describe("chunksOf", () => {
+  it("gives one chunk per run of changed lines, removed lines first, with 0-based starts on both sides", () => {
+    const lines = diffTexts("a\nb\nc\nd\ne\n", "a\nB\nc\nd\nE\nf\n");
+
+    expect(chunksOf(lines)).toEqual([
+      { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1 },
+      { oldStart: 4, oldCount: 1, newStart: 4, newCount: 2 },
+    ]);
+  });
+
+  it("places a pure insertion and a pure deletion between the lines around them", () => {
+    expect(chunksOf(diffTexts("a\nc\n", "a\nb\nc\n"))).toEqual([
+      { oldStart: 1, oldCount: 0, newStart: 1, newCount: 1 },
+    ]);
+    expect(chunksOf(diffTexts("a\nb\nc\n", "a\nc\n"))).toEqual([
+      { oldStart: 1, oldCount: 1, newStart: 1, newCount: 0 },
+    ]);
+  });
+
+  it("gives no chunks for identical texts", () => {
+    expect(chunksOf(diffTexts("a\nb\n", "a\nb\n"))).toEqual([]);
+  });
+
+  it("names the first line of each run", () => {
+    const runs = changeRuns(diffTexts("a\nb\nc\n", "a\nB\nc\nd\n"));
+
+    expect(runs.map((run) => [run.first.kind, run.first.old?.text ?? run.first.new?.text])).toEqual([
+      ["removed", "b"],
+      ["added", "d"],
+    ]);
+  });
+
+  it("finds the fixtures shared with the backend", () => {
+    expect(Object.keys(mergeFixtures).length).toBeGreaterThanOrEqual(9);
+  });
+
+  it.each(Object.entries(mergeFixtures))("matches the chunks of %s", (_path, fixture) => {
+    const lines = diffTexts(withoutBom(fixture.local), withoutBom(fixture.received));
+
+    expect(chunksOf(lines), fixture.name).toEqual(fixture.chunks);
+  });
+});
+
+describe("lineDiff", () => {
+  it("returns the lines of diffTexts and says it did not give up", () => {
+    const result = lineDiff("a\nb\n", "a\nB\n");
+
+    expect(result.gaveUp).toBe(false);
+    expect(result.lines).toEqual(diffTexts("a\nb\n", "a\nB\n"));
+  });
+
+  it("says it gave up when the line diff passes the edit limit", () => {
+    const before = numbered(1200);
+    const after = before.map((line, index) => (index % 2 === 0 ? `${line} changed` : line));
+
+    expect(lineDiff(text(before), text(after)).gaveUp).toBe(true);
+  });
+
+  it("does not count a one-sided change as giving up", () => {
+    expect(lineDiff("", text(numbered(3000))).gaveUp).toBe(false);
+  });
+});
+
+describe("chunksOverlapping", () => {
+  const exact: LineChunk[] = [
+    { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1 },
+    { oldStart: 3, oldCount: 0, newStart: 3, newCount: 2 },
+    { oldStart: 6, oldCount: 2, newStart: 7, newCount: 0 },
+  ];
+
+  it("lists the chunks whose old or new lines meet the block", () => {
+    expect(chunksOverlapping({ oldStart: 1, oldCount: 3, newStart: 1, newCount: 1 }, exact)).toEqual([0]);
+    expect(chunksOverlapping({ oldStart: 2, oldCount: 0, newStart: 2, newCount: 2 }, exact)).toEqual([1]);
+    expect(chunksOverlapping({ oldStart: 0, oldCount: 8, newStart: 0, newCount: 9 }, exact)).toEqual([0, 1, 2]);
+    expect(chunksOverlapping({ oldStart: 7, oldCount: 1, newStart: 8, newCount: 0 }, exact)).toEqual([2]);
+  });
+
+  it("lists none for a block beside every chunk", () => {
+    expect(chunksOverlapping({ oldStart: 2, oldCount: 1, newStart: 2, newCount: 1 }, exact)).toEqual([]);
   });
 });
