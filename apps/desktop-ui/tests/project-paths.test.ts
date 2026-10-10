@@ -57,10 +57,25 @@ describe("groupByFolder", () => {
 
     expect(grouped.prefix).toEqual(["C:", "repos"]);
     expect(grouped.separator).toBe("\\");
-    expect(grouped.groups.map((group) => group.folder)).toEqual(["apps", "libs", null]);
-    expect(grouped.groups[0]?.items.map((entry) => entry.item.name)).toEqual(["apps-api", "apps-web"]);
-    expect(grouped.groups[0]?.items[0]?.rest).toEqual(["apps", "api"]);
-    expect(grouped.groups[2]?.items[0]?.rest).toEqual(["tool"]);
+    expect(grouped.groups.map((group) => group.folder)).toEqual([null, "apps", "libs"]);
+    expect(grouped.groups[1]?.items.map((entry) => entry.item.name)).toEqual(["apps-api", "apps-web"]);
+    expect(grouped.groups[1]?.items[0]?.rest).toEqual(["apps", "api"]);
+    expect(grouped.groups[0]?.items[0]?.rest).toEqual(["tool"]);
+  });
+
+  it("lists projects directly under the prefix first so they never sit under another folder's header", () => {
+    const grouped = groupByFolder(
+      [
+        { name: "task-type", path: "/r/all/TaskTypes/Basic" },
+        { name: "core", path: "/r/core-ui/library" },
+        { name: "lab-ui", path: "/r/lab-automation-ui" },
+        { name: "nmr", path: "/r/nmr/TaskTypes/Sample" },
+      ],
+      (project) => project.path,
+    );
+
+    expect(grouped.groups.map((group) => group.folder)).toEqual([null, "all/TaskTypes", "core-ui", "nmr/TaskTypes"]);
+    expect(grouped.groups[0]?.items.map((entry) => entry.item.name)).toEqual(["lab-ui"]);
   });
 
   it("keeps nested folders together", () => {

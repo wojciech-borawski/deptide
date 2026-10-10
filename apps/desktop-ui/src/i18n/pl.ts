@@ -511,6 +511,7 @@ export const pl: Messages = {
     },
     layoutList: "Lista",
     layoutTree: "Drzewo",
+    layoutCards: "Karty",
     onlyAffected: "Tylko zmienione",
     sort: "Sortowanie",
     sortByPath: "Według ścieżki",

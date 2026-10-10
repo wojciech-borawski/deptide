@@ -61,5 +61,7 @@ export function groupByFolder<T>(items: T[], pathOf: (item: T) => string): Group
     else groups.push({ folder, items: [{ item: entry.item, rest }] });
   }
 
-  return { separator, prefix, groups };
+  const unheaded = groups.filter((group) => group.folder === null);
+  const headed = groups.filter((group) => group.folder !== null);
+  return { separator, prefix, groups: [...unheaded, ...headed] };
 }

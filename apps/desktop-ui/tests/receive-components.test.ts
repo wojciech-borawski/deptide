@@ -7,14 +7,26 @@ vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/router", () => ({ routeNames: { settings: "settings" } }));
 
 import IgnorePatternChips from "@/components/transfer/IgnorePatternChips.vue";
+import ReceiveClipboardStep from "@/components/transfer/ReceiveClipboardStep.vue";
 import ReceiveFileList from "@/components/transfer/ReceiveFileList.vue";
 import ReceiveFileTree from "@/components/transfer/ReceiveFileTree.vue";
 import ReceiveResult from "@/components/transfer/ReceiveResult.vue";
 import ReceiveTabs from "@/components/transfer/ReceiveTabs.vue";
 import { i18n } from "@/i18n";
 import { useTransferStore } from "@/stores/transfer";
+import { useUiStore } from "@/stores/ui";
 import { file, makeProject } from "./helpers/receive-fixtures";
-import { dispatch, findAll, mount, textOf, type Mounted, type TestNode } from "./helpers/test-renderer";
+import {
+  buttonLabelled,
+  click,
+  dispatch,
+  findAll,
+  mount,
+  testDocument,
+  textOf,
+  type Mounted,
+  type TestNode,
+} from "./helpers/test-renderer";
 
 const projects = [
   makeProject("C:\\clip\\web", "web", [file("a.ts", "added")]),
@@ -434,5 +446,46 @@ describe("ReceiveResult", () => {
 
     expect(html).toContain("Changed since Analyze, not replaced. Analyze again.");
     expect(html).toContain("src/c.ts");
+  });
+});
+
+describe("ReceiveClipboardStep layout", () => {
+  let mounted: Mounted | undefined;
+
+  afterEach(() => {
+    mounted?.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("switches the clipboard folders between the list and two-column cards and remembers the choice", async () => {
+    vi.stubGlobal("document", testDocument);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useTransferStore();
+    store.entries = [
+      {
+        path: "C:\\clip\\web",
+        name: "web",
+        isProject: true,
+        packageName: null,
+        suggestedProject: null,
+        files: 3,
+        bytes: 10,
+      },
+    ];
+    mounted = mount(ReceiveClipboardStep, (app) => {
+      app.use(pinia);
+      app.use(i18n);
+    });
+    const entriesBox = (): TestNode | undefined =>
+      findAll(mounted?.root as TestNode, "div").find((node) => String(node.props.class).includes("entries"));
+
+    expect(String(entriesBox()?.props.class)).not.toContain("cards");
+
+    click(buttonLabelled(mounted.root, "Cards") as TestNode);
+    await nextTick();
+
+    expect(useUiStore().clipboardLayout).toBe("cards");
+    expect(String(entriesBox()?.props.class)).toContain("cards");
   });
 });

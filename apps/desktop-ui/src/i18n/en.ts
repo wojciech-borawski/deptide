@@ -500,6 +500,7 @@ export const en = {
     },
     layoutList: "List",
     layoutTree: "Tree",
+    layoutCards: "Cards",
     onlyAffected: "Only affected",
     sort: "Sort",
     sortByPath: "By path",

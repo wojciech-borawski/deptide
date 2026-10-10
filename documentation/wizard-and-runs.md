@@ -288,5 +288,6 @@ part of the path that every listed project shares into a `[…]` button; clickin
 it shows the full prefix for that row. What remains is used to group the
 projects by folder: each folder gets a header row, and when a folder holds more
 than one project both the header and the folder name in the paths are drawn in
-the accent colour. Projects directly under the shared prefix are listed without
-a header. Grouping follows the current filter, so it reflects what is visible.
+the accent colour. Projects directly under the shared prefix are listed first,
+without a header, so they never look like part of another folder's group.
+Grouping follows the current filter, so it reflects what is visible.

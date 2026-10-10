@@ -17,6 +17,8 @@ export type ReceiveLayout = "list" | "tree";
 
 export type ReceiveSort = "path" | "change";
 
+export type ClipboardLayout = "list" | "cards";
+
 export type DiffMode = "unified" | "split";
 
 interface StoredPreferences {
@@ -30,6 +32,7 @@ interface StoredPreferences {
   receiveSort: ReceiveSort;
   receiveSplit: number;
   diffMode: DiffMode;
+  clipboardLayout: ClipboardLayout;
 }
 
 const storageKey = "deptide:preferences";
@@ -45,6 +48,8 @@ const receiveLayouts: readonly ReceiveLayout[] = ["list", "tree"];
 const receiveSorts: readonly ReceiveSort[] = ["path", "change"];
 
 const diffModes: readonly DiffMode[] = ["unified", "split"];
+
+const clipboardLayouts: readonly ClipboardLayout[] = ["list", "cards"];
 
 const receiveSplitRange = { min: 5, max: 95 };
 
@@ -68,6 +73,7 @@ export function parsePreferences(raw: string): StoredPreferences {
     receiveSort: "path",
     receiveSplit: 32,
     diffMode: "unified",
+    clipboardLayout: "list",
   };
 
   try {
@@ -84,6 +90,7 @@ export function parsePreferences(raw: string): StoredPreferences {
       receiveSort: oneOf(receiveSorts, parsed.receiveSort, defaults.receiveSort),
       receiveSplit: inRange(parsed.receiveSplit, receiveSplitRange, defaults.receiveSplit),
       diffMode: oneOf(diffModes, parsed.diffMode, defaults.diffMode),
+      clipboardLayout: oneOf(clipboardLayouts, parsed.clipboardLayout, defaults.clipboardLayout),
     };
   } catch {
     return defaults;
@@ -139,6 +146,10 @@ export const useUiStore = defineStore("ui", () => {
     get: () => preferences.value.diffMode,
     set: (value) => (preferences.value.diffMode = value),
   });
+  const clipboardLayout = computed({
+    get: () => preferences.value.clipboardLayout,
+    set: (value) => (preferences.value.clipboardLayout = value),
+  });
 
   const update = ref<UpdateInfo | null>(null);
   const info = ref<AppInfo>({ name: "Deptide", version: "", identifier: "dev.deptide.app" });
@@ -189,6 +200,7 @@ export const useUiStore = defineStore("ui", () => {
     receiveSort,
     receiveSplit,
     diffMode,
+    clipboardLayout,
     update,
     info,
     updateError,

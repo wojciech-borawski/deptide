@@ -515,6 +515,7 @@ export const de: Messages = {
     },
     layoutList: "Liste",
     layoutTree: "Baum",
+    layoutCards: "Karten",
     onlyAffected: "Nur betroffene",
     sort: "Sortierung",
     sortByPath: "Nach Pfad",

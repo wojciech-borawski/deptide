@@ -9,13 +9,21 @@ import ProgressBar from "@/components/ui/ProgressBar.vue";
 import { downloadPercent } from "@/lib/clipboard-download";
 import { formatBytes } from "@/lib/format";
 import { useTransferStore } from "@/stores/transfer";
+import { useUiStore, type ClipboardLayout } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 import IgnorePatternChips from "./IgnorePatternChips.vue";
 
 const workspace = useWorkspaceStore();
 const transfer = useTransferStore();
+const ui = useUiStore();
 const { t } = useI18n();
 
+const layouts: { layout: ClipboardLayout; label: string }[] = [
+  { layout: "list", label: "transfer.layoutList" },
+  { layout: "cards", label: "transfer.layoutCards" },
+];
+
+const cards = computed(() => ui.clipboardLayout === "cards");
 const projectNames = computed(() =>
   workspace.projects.filter((project) => project.exists).map((project) => project.name),
 );
@@ -43,13 +51,28 @@ function entrySize(entry: ClipboardEntry): string {
 </script>
 
 <template>
-  <div class="stack">
-    <p class="muted">{{ t("transfer.receiveIntro") }}</p>
+  <div class="stack clipboard-step">
+    <p class="muted intro">{{ t("transfer.receiveIntro") }}</p>
 
-    <section class="card stack">
+    <section class="card stack found">
       <div class="card-title">
         <h3>{{ t("transfer.found") }}</h3>
-        <span class="row muted"><span class="spinner" /> {{ t("transfer.watching") }}</span>
+        <span class="row">
+          <span class="row muted"><span class="spinner" /> {{ t("transfer.watching") }}</span>
+          <span class="segmented">
+            <button
+              v-for="entry in layouts"
+              :key="entry.layout"
+              class="chip"
+              :class="{ active: ui.clipboardLayout === entry.layout }"
+              type="button"
+              :aria-pressed="ui.clipboardLayout === entry.layout"
+              @click="ui.clipboardLayout = entry.layout"
+            >
+              {{ t(entry.label) }}
+            </button>
+          </span>
+        </span>
       </div>
 
       <div v-if="showSource" class="clipboard-source small">
@@ -71,8 +94,8 @@ function entrySize(entry: ClipboardEntry): string {
 
       <p v-if="!transfer.entries.length" class="muted">{{ t("transfer.nothing") }}</p>
 
-      <div v-else class="list">
-        <div v-for="entry in transfer.entries" :key="entry.path" class="list-row entry">
+      <div v-else class="entries" :class="cards ? 'cards' : 'list'">
+        <div v-for="entry in transfer.entries" :key="entry.path" class="entry" :class="{ 'list-row': !cards }">
           <AppIcon name="folder" :size="16" />
           <span class="details">
             <span class="row">
@@ -86,9 +109,11 @@ function entrySize(entry: ClipboardEntry): string {
             }}</span>
           </span>
           <label class="target">
-            <span class="muted small">{{ t("transfer.target") }}</span>
+            <span v-if="!cards" class="muted small">{{ t("transfer.target") }}</span>
             <select
               class="select"
+              :class="{ 'input-sm': cards }"
+              :aria-label="cards ? t('transfer.target') : undefined"
               :value="transfer.targets[entry.path] ?? ''"
               :disabled="transfer.downloading"
               @change="transfer.setTarget(entry.path, ($event.target as HTMLSelectElement).value)"
@@ -125,8 +150,59 @@ function entrySize(entry: ClipboardEntry): string {
 </template>
 
 <style scoped>
+.clipboard-step {
+  min-height: 0;
+}
+
+.found {
+  min-height: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.entries {
+  min-height: 96px;
+  overflow: auto;
+}
+
+.entries.cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 8px;
+}
+
 .entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
+}
+
+.cards .entry {
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.cards .details {
+  flex: 1 1 0;
+}
+
+.cards .details .row {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cards .target {
+  flex: 1 1 100%;
+  min-width: 0;
 }
 
 .details {
@@ -167,6 +243,23 @@ function entrySize(entry: ClipboardEntry): string {
 
 .download .grow {
   flex: 1;
+}
+
+/* Short windows: give the folder list room while the controls below it stay in view. */
+@media (max-height: 760px) {
+  .intro,
+  .found :deep(.hint) {
+    display: none;
+  }
+
+  .entries {
+    min-height: 64px;
+  }
+
+  .textarea {
+    min-height: 34px;
+    height: 34px;
+  }
 }
 
 .download-bar {

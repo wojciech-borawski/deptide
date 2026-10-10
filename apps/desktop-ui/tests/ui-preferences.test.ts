@@ -6,6 +6,14 @@ beforeEach(() => {
   vi.stubGlobal("navigator", { language: "en-US" });
 });
 
+describe("parsePreferences clipboardLayout", () => {
+  it("defaults to the list and keeps a stored card layout", () => {
+    expect(parsePreferences("").clipboardLayout).toBe("list");
+    expect(parsePreferences(JSON.stringify({ clipboardLayout: "cards" })).clipboardLayout).toBe("cards");
+    expect(parsePreferences(JSON.stringify({ clipboardLayout: "tiles" })).clipboardLayout).toBe("list");
+  });
+});
+
 describe("parsePreferences receiveSplit", () => {
   it("defaults to 32 percent when nothing is stored", () => {
     expect(parsePreferences("").receiveSplit).toBe(32);
