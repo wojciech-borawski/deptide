@@ -1,39 +1,14 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use common::{GitRepo, TempDir};
+use common::{read_version, stacked_branches, GitRepo, Lines, TempDir};
 use deptide_core::domain::{
     BumpWhen, ExecutionMode, Job, JobStatus, PackageSpec, StepName, VersionBump, VersionPolicy,
 };
-use deptide_core::execution::{execute_run, ProgressSink, RunContext, RunEvent, RunOptions};
+use deptide_core::execution::{execute_run, RunContext, RunOptions};
 use deptide_core::scan::{version_at_fork_point, ForkPointVersion};
-
-#[derive(Default)]
-struct Lines {
-    seen: Mutex<Vec<String>>,
-}
-
-impl ProgressSink for Lines {
-    fn emit(&self, event: RunEvent) {
-        if let RunEvent::LogLine { line, .. } = event {
-            self.seen.lock().unwrap().push(line);
-        }
-    }
-}
-
-/// main at 1.0.0, branch A from main bumps to 1.1.0, branch B from A adds an
-/// unrelated commit. HEAD is on B.
-fn stacked_branches(label: &str) -> GitRepo {
-    let repo = GitRepo::new(label);
-    repo.commit_version("", "1.0.0");
-    repo.git(&["checkout", "-q", "-b", "A"]);
-    repo.commit_version("", "1.1.0");
-    repo.git(&["checkout", "-q", "-b", "B"]);
-    repo.commit_other("readme");
-    repo
-}
 
 fn add_remote(repo: &GitRepo) {
     let remote = repo.outside().join("remote.git");
@@ -51,15 +26,9 @@ fn found(version: &str, base_branch: &str, commit: String) -> ForkPointVersion {
 
 fn unavailable_reason(directory: &Path) -> String {
     match version_at_fork_point(directory) {
-        ForkPointVersion::Unavailable(reason) => reason,
+        ForkPointVersion::Unavailable(cause) => cause.text().to_string(),
         other => panic!("expected no fork point, got {other:?}"),
     }
-}
-
-fn read_version(directory: &Path) -> String {
-    let text = std::fs::read_to_string(directory.join("package.json")).unwrap();
-    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
-    manifest["version"].as_str().unwrap().to_string()
 }
 
 async fn run_version_step(directory: PathBuf, when: BumpWhen) -> (JobStatus, Vec<String>) {
@@ -84,6 +53,7 @@ async fn run_version_job(
             bump: VersionBump::Minor,
             when,
         },
+        packing: None,
     };
 
     let sink = Arc::new(Lines::default());
@@ -570,7 +540,7 @@ async fn the_version_step_bumps_when_the_branch_has_not_changed_the_version() {
         run_version_step(repo.path().to_path_buf(), BumpWhen::NotBumpedOnBranch).await;
 
     let expected = format!(
-        "version 1.1.0 is unchanged since A ({}), bumping",
+        "no commit of this branch changed version 1.1.0 since A ({}), bumping",
         repo.short("A")
     );
     assert!(
@@ -590,8 +560,8 @@ async fn the_version_step_skips_when_the_branch_already_changed_the_version() {
         run_version_step(repo.path().to_path_buf(), BumpWhen::NotBumpedOnBranch).await;
 
     let expected = format!(
-        "version 1.2.0 already changed on this branch (was 1.1.0 at A {}), bump skipped",
-        repo.short("A")
+        "version 1.2.0 already changed on this branch (1.1.0 -> 1.2.0 in {}), bump skipped",
+        repo.short("HEAD")
     );
     assert!(
         lines.contains(&expected),
@@ -762,4 +732,170 @@ fn the_remote_head_pointer_is_not_named_as_the_base() {
         version_at_fork_point(repo.path()),
         found("1.0.0", "origin/main", repo.short("origin/main"))
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_version_merged_in_from_main_is_not_a_bump_by_this_branch() {
+    let repo = GitRepo::new("fork-run-merge-main");
+    repo.commit_version("", "1.0.0");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.commit_other("feature work");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.commit_version("", "1.1.0");
+    repo.git(&["checkout", "-q", "feature"]);
+    repo.git(&["merge", "-q", "--no-edit", "-m", "merge main", "main"]);
+
+    let (status, lines) =
+        run_version_step(repo.path().to_path_buf(), BumpWhen::NotBumpedOnBranch).await;
+
+    assert!(
+        lines.iter().any(|line| line.ends_with(", bumping")),
+        "{lines:?}"
+    );
+    assert_eq!(status, JobStatus::Ok, "{lines:?}");
+    assert_eq!(read_version(repo.path()), "1.2.0");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_version_changed_and_changed_back_on_the_branch_counts_as_bumped() {
+    let repo = stacked_branches("fork-run-revert");
+    repo.commit_version("", "1.2.0");
+    let bump = repo.short("HEAD");
+    repo.commit_version("", "1.1.0");
+
+    let (status, lines) =
+        run_version_step(repo.path().to_path_buf(), BumpWhen::NotBumpedOnBranch).await;
+
+    let expected = format!(
+        "version 1.1.0 already changed on this branch (1.1.0 -> 1.2.0 in {bump}), bump skipped"
+    );
+    assert!(
+        lines.contains(&expected),
+        "expected {expected:?} in {lines:?}"
+    );
+    assert_eq!(status, JobStatus::Ok);
+    assert_eq!(read_version(repo.path()), "1.1.0");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_branch_that_bumped_before_merging_main_counts_as_bumped() {
+    let repo = GitRepo::new("fork-run-bump-then-merge");
+    repo.commit_version("", "1.0.0");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.commit_version("", "1.0.1");
+    let bump = repo.short("HEAD");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.commit_other("main work");
+    repo.git(&["checkout", "-q", "feature"]);
+    repo.git(&["merge", "-q", "--no-edit", "-m", "merge main", "main"]);
+
+    let (status, lines) =
+        run_version_step(repo.path().to_path_buf(), BumpWhen::NotBumpedOnBranch).await;
+
+    let expected = format!(
+        "version 1.0.1 already changed on this branch (1.0.0 -> 1.0.1 in {bump}), bump skipped"
+    );
+    assert!(
+        lines.contains(&expected),
+        "expected {expected:?} in {lines:?}"
+    );
+    assert_eq!(status, JobStatus::Ok);
+    assert_eq!(read_version(repo.path()), "1.0.1");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_nested_project_bumps_only_on_its_own_version_changes() {
+    let repo = GitRepo::new("fork-run-nested");
+    repo.commit_version("apps/web", "1.0.0");
+    repo.commit_version("apps/api", "2.0.0");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.commit_version("apps/api", "2.1.0");
+    let api_bump = repo.short("HEAD");
+
+    let (web_status, web_lines) =
+        run_version_step(repo.path().join("apps/web"), BumpWhen::NotBumpedOnBranch).await;
+    let (api_status, api_lines) =
+        run_version_step(repo.path().join("apps/api"), BumpWhen::NotBumpedOnBranch).await;
+
+    assert_eq!(web_status, JobStatus::Ok, "{web_lines:?}");
+    assert_eq!(read_version(&repo.path().join("apps/web")), "1.1.0");
+    assert_eq!(api_status, JobStatus::Ok, "{api_lines:?}");
+    let api_skip = format!(
+        "version 2.1.0 already changed on this branch (2.0.0 -> 2.1.0 in {api_bump}), bump skipped"
+    );
+    assert!(
+        api_lines.contains(&api_skip),
+        "expected {api_skip:?} in {api_lines:?}"
+    );
+    assert_eq!(read_version(&repo.path().join("apps/api")), "2.1.0");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_nested_project_whose_folder_starts_with_a_space_still_bumps() {
+    let repo = GitRepo::new("fork-run-space");
+    repo.commit_version(" apps/web", "1.0.0");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.commit_other("feature work");
+
+    let project = repo.path().join(" apps/web");
+    let (status, lines) = run_version_step(project.clone(), BumpWhen::NotBumpedOnBranch).await;
+
+    assert_eq!(status, JobStatus::Ok, "{lines:?}");
+    assert_eq!(read_version(&project), "1.1.0", "{lines:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_octopus_merge_bringing_in_another_branch_version_is_not_a_bump() {
+    let repo = GitRepo::new("fork-run-octopus");
+    repo.commit_version("", "1.0.0");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.commit_other("feature work");
+    repo.git(&["checkout", "-q", "-b", "docs", "main"]);
+    repo.commit_other("docs");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.commit_version("", "1.1.0");
+    repo.git(&["checkout", "-q", "feature"]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-edit",
+        "-m",
+        "merge docs and main",
+        "docs",
+        "main",
+    ]);
+
+    let (status, lines) =
+        run_version_step(repo.path().to_path_buf(), BumpWhen::NotBumpedOnBranch).await;
+
+    assert!(
+        lines.iter().any(|line| line.ends_with(", bumping")),
+        "{lines:?}"
+    );
+    assert_eq!(status, JobStatus::Ok, "{lines:?}");
+    assert_eq!(read_version(repo.path()), "1.2.0");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_and_restoring_package_json_on_the_branch_counts_as_bumped() {
+    let repo = GitRepo::new("fork-run-removed");
+    repo.commit_version("", "1.0.0");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.git(&["rm", "-q", "package.json"]);
+    repo.git(&["commit", "-q", "-m", "remove manifest"]);
+    let removal = repo.short("HEAD");
+    repo.commit_version("", "1.0.0");
+
+    let (status, lines) =
+        run_version_step(repo.path().to_path_buf(), BumpWhen::NotBumpedOnBranch).await;
+
+    let expected = format!(
+        "version 1.0.0 already changed on this branch (1.0.0 -> none in {removal}), bump skipped"
+    );
+    assert!(
+        lines.contains(&expected),
+        "expected {expected:?} in {lines:?}"
+    );
+    assert_eq!(status, JobStatus::Ok);
+    assert_eq!(read_version(repo.path()), "1.0.0");
 }

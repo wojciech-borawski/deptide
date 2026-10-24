@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use common::{manifest, TempDir};
+use common::{link_folder, manifest, TempDir};
 use deptide_core::domain::{ConfiguredProject, UpdateConfig};
 use deptide_core::error::{AppError, AppResult};
 use deptide_core::transfer::{
@@ -798,27 +798,6 @@ fn applying_recycles_overwritten_and_deleted_files_before_copying() {
         journal["projects"][0]["deletedFiles"],
         serde_json::json!(["src/old/gone.ts", "src/old/deeper/also.ts"])
     );
-}
-
-/// Makes `link` a folder link to `target`: a junction on Windows, which needs
-/// no extra rights, and a symlink elsewhere.
-fn link_folder(link: &Path, target: &Path) {
-    #[cfg(windows)]
-    {
-        let native = |path: &Path| path.components().collect::<PathBuf>();
-        let status = std::process::Command::new("cmd")
-            .arg("/C")
-            .arg("mklink")
-            .arg("/J")
-            .arg(native(link))
-            .arg(native(target))
-            .stdout(std::process::Stdio::null())
-            .status()
-            .expect("cmd can be started");
-        assert!(status.success(), "mklink /J failed");
-    }
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).expect("symlink can be created");
 }
 
 #[test]

@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import * as api from "@/api/commands";
-import type { RunSummary, SavedRunFile } from "@/api/types";
+import type { RunBackup, RunSummary, SavedRunFile } from "@/api/types";
 import TrendChart, { type TrendPoint } from "@/components/history/TrendChart.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import RestoreRunDialog from "@/components/run/RestoreRunDialog.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
 import ModalDialog from "@/components/ui/ModalDialog.vue";
@@ -19,6 +20,7 @@ import { classifyRunOutcome, outcomeCount, outcomeTone } from "@/lib/run-outcome
 import { saveReport } from "@/lib/report-export";
 import { formatSpec } from "@/lib/versions";
 import { routeNames } from "@/router";
+import { useRestoreStore } from "@/stores/restore";
 import { useWizardStore } from "@/stores/wizard";
 import { useWorkspaceStore } from "@/stores/workspace";
 
@@ -28,7 +30,9 @@ const router = useRouter();
 const { t } = useI18n();
 const countOf = useCountedNoun();
 
+const restoreStore = useRestoreStore();
 const deleting = ref<SavedRunFile | null>(null);
+const restoring = ref<{ backup: RunBackup; label: string } | null>(null);
 const action = useAsyncAction();
 const error = action.error;
 
@@ -73,6 +77,23 @@ const slowestProjects = computed<TrendPoint[]>(() => {
 
 const hasTrends = computed(() => realRuns.value.length >= 2);
 
+async function loadBackups(): Promise<void> {
+  if (!workspace.root) return;
+  await action.run(() => restoreStore.load(workspace.root));
+}
+
+async function refresh(): Promise<void> {
+  await workspace.refresh();
+  await loadBackups();
+}
+
+onMounted(loadBackups);
+
+function openRestore(summary: RunSummary): void {
+  const backup = restoreStore.backupFor(summary);
+  if (backup) restoring.value = { backup, label: summary.label };
+}
+
 function load(entry: SavedRunFile): void {
   wizard.prefillFromSavedRun(entry.run);
   void router.push({ name: routeNames.wizard });
@@ -114,7 +135,7 @@ async function exportReport(summary: RunSummary): Promise<void> {
 <template>
   <div class="page">
     <PageHeader :title="t('history.title')" :subtitle="workspace.root">
-      <button class="btn btn-ghost btn-sm" type="button" @click="workspace.refresh">
+      <button class="btn btn-ghost btn-sm" type="button" @click="refresh">
         <AppIcon name="refresh" :size="14" />
         {{ t("common.refresh") }}
       </button>
@@ -210,6 +231,16 @@ async function exportReport(summary: RunSummary): Promise<void> {
             >
               {{ t("common.report") }}
             </button>
+            <button
+              v-if="restoreStore.backupFor(summary)"
+              class="btn btn-ghost btn-sm"
+              type="button"
+              :title="t('history.restoreFilesTitle')"
+              @click="openRestore(summary)"
+            >
+              <AppIcon name="history" :size="14" />
+              {{ t("history.restoreFiles") }}
+            </button>
             <button v-if="summary.logFile" class="btn btn-ghost btn-sm" type="button" @click="openLog(summary)">
               <AppIcon name="external" :size="14" />
               {{ t("common.log") }}
@@ -218,6 +249,13 @@ async function exportReport(summary: RunSummary): Promise<void> {
         </div>
       </section>
     </div>
+
+    <RestoreRunDialog
+      :open="restoring !== null"
+      :backup="restoring?.backup ?? null"
+      :label="restoring?.label ?? ''"
+      @close="restoring = null"
+    />
 
     <ModalDialog :open="deleting !== null" :title="t('history.deleteTitle')" width="440px" @close="deleting = null">
       <p>{{ t("history.deleteText", { name: deleting?.run.name ?? "" }) }}</p>

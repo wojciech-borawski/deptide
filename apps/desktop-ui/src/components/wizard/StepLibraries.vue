@@ -92,6 +92,9 @@ onMounted(() => {
       }}
     </div>
     <NoticeBanner v-if="wizard.inspectionError" tone="error" selectable>{{ wizard.inspectionError }}</NoticeBanner>
+    <NoticeBanner v-if="!wizard.inspecting && wizard.packages.length === 0" tone="info">
+      {{ t("libraries.noneChosen") }}
+    </NoticeBanner>
     <NoticeBanner v-if="wizard.inspection?.unreadable.length" tone="warn">
       {{ t("libraries.unreadable", { names: wizard.inspection.unreadable.join(", ") }) }}
     </NoticeBanner>
@@ -161,7 +164,7 @@ onMounted(() => {
       <NoticeBanner v-if="manualError" tone="warn" class="manual-error">{{ manualError }}</NoticeBanner>
       <div v-if="wizard.draft.manualPackages.length" class="chips">
         <span v-for="spec in wizard.draft.manualPackages" :key="spec.name" class="chip active mono">
-          {{ formatSpec(spec) }}
+          {{ formatSpec(spec) }}<span v-if="spec.pack" class="faint">{{ ` ${t("review.packed")}` }}</span>
           <button
             class="chip-remove"
             type="button"

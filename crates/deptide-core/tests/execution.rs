@@ -8,8 +8,8 @@ use deptide_core::domain::{
     UpdateConfig, VersionBump, VersionPolicy,
 };
 use deptide_core::execution::{
-    build_jobs, execute_run, list_summaries, plan_install, ProgressSink, RunContext, RunEvent,
-    RunLogger, RunOptions,
+    build_jobs, describe_version_policy, execute_run, list_summaries, plan_install, ProgressSink,
+    RunContext, RunEvent, RunLogger, RunOptions,
 };
 use deptide_core::workspace::{save_config, Workspace};
 
@@ -36,6 +36,7 @@ fn plan_for(names: &[&str], packages: Vec<PackageSpec>, mode: ExecutionMode) -> 
         label: "test run".to_string(),
         save_as: None,
         version: VersionPolicy::default(),
+        project_bumps: Default::default(),
     }
 }
 
@@ -138,6 +139,139 @@ fn build_jobs_gives_every_job_the_version_policy_of_the_plan() {
     for job in &outcome.jobs {
         assert_eq!(job.version, plan.version, "{}", job.name);
     }
+}
+
+#[test]
+fn build_jobs_gives_a_project_its_own_bump_level_when_one_is_chosen() {
+    let (_root, workspace) = workspace_with_projects();
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+    let mut plan = plan_for(
+        &["web", "api"],
+        vec![PackageSpec::new("@acme/core", "3.1.0")],
+        ExecutionMode::PerProject,
+    );
+    plan.version = VersionPolicy {
+        bump: VersionBump::Patch,
+        when: BumpWhen::NotBumpedOnBranch,
+    };
+    plan.project_bumps
+        .insert("api".to_string(), VersionBump::Major);
+
+    let outcome = build_jobs(&workspace, &config, &plan);
+
+    let bump_of = |name: &str| {
+        let job = outcome.jobs.iter().find(|job| job.name == name).unwrap();
+        (job.version.bump, job.version.when)
+    };
+    assert_eq!(
+        bump_of("web"),
+        (VersionBump::Patch, BumpWhen::NotBumpedOnBranch)
+    );
+    assert_eq!(
+        bump_of("api"),
+        (VersionBump::Major, BumpWhen::NotBumpedOnBranch)
+    );
+}
+
+#[test]
+fn the_version_policy_is_described_with_its_condition_and_exceptions() {
+    let mut plan = plan_for(&["web"], vec![], ExecutionMode::PerProject);
+    plan.version = VersionPolicy {
+        bump: VersionBump::Minor,
+        when: BumpWhen::NotBumpedOnBranch,
+    };
+    assert_eq!(
+        describe_version_policy(&plan),
+        "minor (only when not yet bumped on this branch)"
+    );
+
+    plan.version.when = BumpWhen::SameAsMain;
+    plan.project_bumps = [
+        ("api".to_string(), VersionBump::Major),
+        ("web".to_string(), VersionBump::Minor),
+    ]
+    .into();
+    assert_eq!(
+        describe_version_policy(&plan),
+        "minor (only when still equal to main), except api major"
+    );
+
+    plan.version.when = BumpWhen::Always;
+    plan.project_bumps.clear();
+    assert_eq!(describe_version_policy(&plan), "minor");
+}
+
+#[test]
+fn build_jobs_without_packages_runs_only_the_steps_that_need_none() {
+    let (_root, workspace) = workspace_with_projects();
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+    let mut plan = plan_for(&["web", "api"], vec![], ExecutionMode::PerProject);
+    plan.steps = vec![
+        StepName::Uninstall,
+        StepName::Install,
+        StepName::ForceInstall,
+        StepName::Version,
+        StepName::Audit,
+        StepName::Build,
+    ];
+
+    let outcome = build_jobs(&workspace, &config, &plan);
+
+    assert!(
+        outcome.without_packages.is_empty(),
+        "{:?}",
+        outcome.without_packages
+    );
+    assert_eq!(outcome.jobs.len(), 2);
+    for job in &outcome.jobs {
+        assert!(job.packages.is_empty(), "{}", job.name);
+        assert_eq!(
+            job.steps,
+            vec![StepName::Version, StepName::Audit, StepName::Build],
+            "{}",
+            job.name
+        );
+    }
+}
+
+#[test]
+fn the_audit_report_step_needs_no_library() {
+    let (_root, workspace) = workspace_with_projects();
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+    let plan: Result<RunPlan, _> = serde_json::from_value(serde_json::json!({
+        "projectNames": ["web"],
+        "packages": [],
+        "steps": ["install", "audit-report", "build"],
+        "mode": "per-project",
+        "concurrency": 1,
+        "label": "audit",
+    }));
+    let plan = plan.expect("a plan with the audit report step parses");
+
+    let outcome = build_jobs(&workspace, &config, &plan);
+
+    let steps: Vec<serde_json::Value> = outcome.jobs[0]
+        .steps
+        .iter()
+        .map(|step| serde_json::to_value(step).unwrap())
+        .collect();
+    assert_eq!(steps, vec!["audit-report", "build"]);
+}
+
+#[test]
+fn build_jobs_without_packages_and_only_package_steps_has_nothing_to_do() {
+    let (_root, workspace) = workspace_with_projects();
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+    let mut plan = plan_for(&["web", "api"], vec![], ExecutionMode::PerProject);
+    plan.steps = vec![
+        StepName::Uninstall,
+        StepName::Install,
+        StepName::ForceInstall,
+    ];
+
+    let outcome = build_jobs(&workspace, &config, &plan);
+
+    assert!(outcome.jobs.is_empty());
 }
 
 async fn run(
@@ -289,7 +423,7 @@ async fn force_install_step_adds_the_force_flag() {
     assert!(job
         .log
         .iter()
-        .any(|line| line == "would install @acme/core@3.1.0-ABC-1 --force"));
+        .any(|line| line == "would run npm install @acme/core@3.1.0-ABC-1 --force --no-fund"));
     assert_eq!(snapshot.steps, vec![StepName::ForceInstall]);
 }
 
@@ -356,6 +490,7 @@ async fn a_consumer_is_skipped_when_its_library_fails() {
         depends_on: depends_on.into_iter().map(String::from).collect(),
         command: None,
         version: VersionPolicy::default(),
+        packing: None,
     };
 
     let sink = Arc::new(RecordingSink::default());
@@ -414,6 +549,7 @@ async fn the_version_step_is_skipped_without_a_main_branch_to_compare_with() {
             bump: VersionBump::Minor,
             when: BumpWhen::SameAsMain,
         },
+        packing: None,
     };
 
     let sink = Arc::new(RecordingSink::default());
@@ -635,6 +771,7 @@ fn peer_installs_turn_save_exact_off_and_other_installs_keep_it() {
         depends_on: vec![],
         command: None,
         version: VersionPolicy::default(),
+        packing: None,
     };
 
     let groups = install_args_per_group(&job);
@@ -695,6 +832,7 @@ fn peer_job(root: &TempDir, steps: Vec<StepName>) -> deptide_core::domain::Job {
         depends_on: vec![],
         command: None,
         version: VersionPolicy::default(),
+        packing: None,
     }
 }
 
@@ -727,8 +865,8 @@ async fn a_dry_run_shows_peer_installs_and_the_peer_ranges_it_would_restore() {
         let log = dry_run_log(vec![job], mode).await;
 
         for expected in [
-            "would install left-pad@1.3.0 --save-dev",
-            "would install @acme/core@2.1.0 --save-peer",
+            "would run npm install left-pad@1.3.0 --save-dev --save-exact",
+            "would run npm install @acme/core@2.1.0 --save-peer --no-save-exact",
             "--save-exact dropped for peer installs: an exact peer range pins consumers to one version",
             "would restore peerDependencies.left-pad = ^1.0.0",
         ] {
@@ -749,7 +887,7 @@ async fn a_dry_run_shows_peer_installs_and_the_peer_ranges_it_would_restore() {
             .unwrap();
         let last_install = log
             .iter()
-            .rposition(|line| line.starts_with("would install"))
+            .rposition(|line| line.starts_with("would run npm install"))
             .unwrap();
         let build = log
             .iter()

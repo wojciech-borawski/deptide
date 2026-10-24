@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import type { DependencyCandidate } from "@/api/types";
+import { allSteps } from "@/api/types";
 import {
   buildRerunPlan,
   buildRunPlan,
+  changesPackages,
   choiceProblem,
   createChoice,
   draftProblems,
   isPeerOnly,
   orderedSteps,
   parseArguments,
+  projectBumpFor,
   resolveVersion,
   selectedPackages,
   type WizardDraft,
@@ -24,6 +27,8 @@ const core: DependencyCandidate = {
   usedBy: ["web", "api"],
   isDevDependency: false,
   sections: ["dependencies"],
+  libraryProject: "Core",
+  ambiguousProjects: [],
 };
 
 const vue: DependencyCandidate = {
@@ -35,6 +40,8 @@ const vue: DependencyCandidate = {
   usedBy: ["web"],
   isDevDependency: true,
   sections: ["dev", "peer"],
+  libraryProject: null,
+  ambiguousProjects: [],
 };
 
 function draft(overrides: Partial<WizardDraft> = {}): WizardDraft {
@@ -49,6 +56,8 @@ function draft(overrides: Partial<WizardDraft> = {}): WizardDraft {
     extraInstallArgs: "  --force   --legacy-peer-deps ",
     versionBump: "minor",
     bumpWhen: "not-bumped-on-branch",
+    bumpPerProject: false,
+    projectBumps: {},
     label: "  ",
     saveRun: true,
     saveName: "",
@@ -88,6 +97,23 @@ describe("selectedPackages sections", () => {
       { name: "@acme/ui", saveDev: false, savePeer: true },
       { name: "@acme/theme", saveDev: false, savePeer: false },
     ]);
+  });
+});
+
+describe("packing a library", () => {
+  it("packs the library at its local version, without saving unless asked", () => {
+    const choice = { ...createChoice(core), selected: true, mode: "pack" as const };
+
+    expect(selectedPackages(draft({ choices: [choice] }))).toEqual([
+      { name: "@acme/core", version: "3.1.0-ABC-1", saveDev: false, savePeer: false, pack: "no-save" },
+    ]);
+    expect(selectedPackages(draft({ choices: [{ ...choice, packMode: "save" }] }))[0]?.pack).toBe("save");
+  });
+
+  it("refuses to pack a library that is not a configured project", () => {
+    const choice = { ...createChoice(vue), selected: true, mode: "pack" as const, localVersion: "3.4.0" };
+
+    expect(choiceProblem(choice)).toBe("wizard.problems.packNeedsProject");
   });
 });
 
@@ -160,6 +186,33 @@ describe("buildRunPlan", () => {
     },
   );
 
+  it("sends only the per-project bumps that differ, and only when they are switched on", () => {
+    const perProject = draft({
+      projectNames: ["web", "api", "cli"],
+      steps: ["version"],
+      bumpPerProject: true,
+      projectBumps: { web: "minor", api: "major", gone: "major" },
+    });
+
+    expect(buildRunPlan(perProject).projectBumps).toEqual({ api: "major" });
+    expect(buildRunPlan({ ...perProject, bumpPerProject: false }).projectBumps).toEqual({});
+    expect(buildRunPlan({ ...perProject, steps: ["build"] }).projectBumps).toEqual({});
+  });
+
+  it("keeps the bump of projects named like object members", () => {
+    const named = draft({
+      projectNames: ["__proto__", "constructor", "toString"],
+      steps: ["version"],
+      bumpPerProject: true,
+      projectBumps: JSON.parse('{"__proto__":"major"}'),
+    });
+
+    expect(JSON.stringify(buildRunPlan(named).projectBumps)).toBe('{"__proto__":"major"}');
+    expect(projectBumpFor(named, "__proto__")).toBe("major");
+    expect(projectBumpFor(named, "constructor")).toBe("minor");
+    expect(projectBumpFor(named, "toString")).toBe("minor");
+  });
+
   it("does not save when the switch is off", () => {
     expect(buildRunPlan(draft({ saveRun: false })).saveAs).toBeNull();
   });
@@ -169,7 +222,7 @@ describe("draftProblems", () => {
   it("validates each wizard step cumulatively", () => {
     expect(draftProblems(draft({ projectNames: [] }), 0)).toEqual([{ key: "wizard.problems.selectProject" }]);
     expect(draftProblems(draft(), 0)).toEqual([]);
-    expect(draftProblems(draft(), 1)).toEqual([{ key: "wizard.problems.selectLibrary" }]);
+    expect(draftProblems(draft(), 1)).toEqual([]);
 
     const ready = draft({ steps: [], concurrency: 0 });
     ready.choices[0]!.selected = true;
@@ -177,6 +230,26 @@ describe("draftProblems", () => {
       { key: "wizard.problems.selectStep" },
       { key: "wizard.problems.concurrency" },
     ]);
+  });
+});
+
+describe("a run without libraries", () => {
+  it("is allowed when it only bumps, audits or builds", () => {
+    expect(draftProblems(draft({ steps: ["version", "audit", "build"] }), 2)).toEqual([]);
+  });
+
+  it("flags the steps that need a library", () => {
+    expect(draftProblems(draft({ steps: ["install", "build"] }), 2)).toEqual([
+      { key: "wizard.problems.stepsNeedLibrary" },
+    ]);
+
+    const withLibrary = draft({ steps: ["install", "build"] });
+    withLibrary.choices[0]!.selected = true;
+    expect(draftProblems(withLibrary, 2)).toEqual([]);
+  });
+
+  it("knows which steps change packages", () => {
+    expect(allSteps.filter(changesPackages)).toEqual(["uninstall", "install", "force-install"]);
   });
 });
 
@@ -191,9 +264,25 @@ describe("buildRerunPlan", () => {
     expect(rerun.steps).toEqual(["install", "build"]);
     expect(rerun.packages).toEqual(plan.packages);
     expect(rerun.extraInstallArgs).toEqual(plan.extraInstallArgs);
+    expect(rerun.version).toEqual(plan.version);
     expect(rerun.label).toBe("core-rerun");
     expect(rerun.saveAs).toBeNull();
     expect(buildRerunPlan(rerun, ["api"], ["build"]).label).toBe("core-rerun");
+  });
+});
+
+describe("buildRerunPlan with per-project bumps", () => {
+  it("keeps the per-project bump levels", () => {
+    const plan = buildRunPlan(
+      draft({
+        projectNames: ["web", "api"],
+        steps: ["version"],
+        bumpPerProject: true,
+        projectBumps: { api: "major" },
+      }),
+    );
+
+    expect(buildRerunPlan(plan, ["api"], ["version"]).projectBumps).toEqual({ api: "major" });
   });
 });
 
@@ -206,5 +295,19 @@ describe("helpers", () => {
   it("keeps the canonical step order", () => {
     expect(orderedSteps(["build", "uninstall", "audit"])).toEqual(["uninstall", "audit", "build"]);
     expect(orderedSteps(["audit", "force-install"])).toEqual(["force-install", "audit"]);
+  });
+
+  it("runs the audit report after audit fix and before the build", () => {
+    expect(orderedSteps(["build", "audit-report", "audit", "install"])).toEqual([
+      "install",
+      "audit",
+      "audit-report",
+      "build",
+    ]);
+  });
+
+  it("lets a run without a library produce only an audit report", () => {
+    expect(changesPackages("audit-report")).toBe(false);
+    expect(draftProblems(draft({ steps: ["audit-report"] }), 2)).toEqual([]);
   });
 });

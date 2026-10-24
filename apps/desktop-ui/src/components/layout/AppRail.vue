@@ -26,6 +26,7 @@ const { t } = useI18n();
 
 const items = computed<RailItem[]>(() => [
   { name: routeNames.wizard, label: t("nav.update"), icon: "update" },
+  { name: routeNames.dependencies, label: t("nav.dependencies"), icon: "graph" },
   { name: routeNames.run, label: t("nav.run"), icon: "play" },
   { name: routeNames.transfer, label: t("nav.transfer"), icon: "layers" },
   { name: routeNames.terminal, label: t("nav.terminal"), icon: "terminal" },

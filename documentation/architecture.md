@@ -10,20 +10,29 @@ apps/desktop-ui/     the Vue 3 + TypeScript + Pinia + vue-router app, an npm wor
     api/               typed wrappers around invoke() and listen(), the DTO types
     stores/            workspace (what is open), wizard (the draft plan), run and
                      terminal (live runs, both built on useRunTracker), transfer,
-                     settings-draft (the form on the Settings screen), ui (preferences)
+                     dependencies (the Dependencies screen: tab, results, busy
+                     flags), settings-draft (the form on the Settings screen),
+                     ui (preferences)
     composables/       reusable logic without a store: useRunTracker (event stream,
                      logs, clock, counts), useAsyncAction (busy + error around a
                      call), useProjectFilter and useProjectSelection (list search,
-                     kind chips, toggle and select-all), useCountedNoun (plurals)
+                     kind chips, toggle and select-all), useCountedNoun (plurals),
+                     useGraphHighlight (hovered, focused and pinned graph node),
+                     useModal (open dialogs: Escape, focus trap and return,
+                     isModalOpen for page shortcuts)
     lib/               pure functions: version helpers, plan builder, formatting
-                     (luxon), timing baseline, run outcome, path grouping, reports
+                     (luxon), timing baseline, run outcome, path grouping, reports,
+                     dependency-drift (filters, version picks, cell selection),
+                     dependency-graph-layout (layered positions and edge curves)
     views/             one thin component per screen; they compose the pieces below
     components/        wizard steps, run widgets (JobTable, LogPane, RunClock,
                      RunStatusLine, RunSummaryCard), terminal (CommandPrompt,
                      CommandTable, TerminalProjectPicker), settings cards,
                      projects (ProjectPickerList, ProjectKindChips), transfer
-                     panels, ui primitives (ActionButton, NoticeBanner, SearchBox,
-                     ProgressBar, ProjectPath, ModalDialog, icons), the rail
+                     panels, dependencies (VersionDriftTab, DependencyGraphTab,
+                     DuplicateCopiesTab), ui primitives (ActionButton,
+                     NoticeBanner, SearchBox, ProgressBar, ProjectPath,
+                     ModalDialog, icons), the rail
     dev/mock/          in-memory fake backend for the browser: workspace fixtures,
                      a MockRun that emits the same events, the command handlers
 
@@ -33,24 +42,32 @@ crates/deptide-core/ the engine, no Tauri dependency:
   workspace/         the folder the user picked: paths, settings, config, saved runs,
                      recent list, open_with_config
   scan/              package.json reader, project detection, dependency candidates,
-                     duplicates, scan merge
+                     duplicates (config entries that point at one folder), scan
+                     merge
   execution/         command runner (npm and shell lines), steps (what each npm
                      step runs and how a dry run describes it), pipeline (one job
                      through its steps with retry, verify and backup), scheduler
                      with dependency gate, run state, transcript logger, install
-                     verification, failure diagnostics, report rendering
+                     verification, failure diagnostics, report rendering, project
+                     locks (one writer per project across processes, under the
+                     workspace's locks/)
+  dependencies/      the Dependencies screen: declared and installed versions per
+                     library, npm view lookups, the library graph in run order,
+                     the bounded node_modules walk for duplicate copies
   transfer/          clipboard transfer: gitignore-aware file collection, staging
                      folders, the transfer journal, file clipboard (clipboard-win
                      on Windows, arboard elsewhere), receive analysis and apply
-  util/              json files, text helpers, time formatting
+  util/              json files, text helpers, time formatting, npm-compatible
+                     semver (versions, comparison, ranges)
   tests/             integration tests that drive the engine without a window
 crates/deptide-desktop/ the Tauri application (binary `deptide`, product Deptide):
   src/app/           commands split by screen (workspace, scan, run, transfer,
-                     misc) with one run launcher, event sink with notifications,
-                     tray icon, error log, in-memory run registry
+                     dependencies, misc) with one run launcher, event sink with
+                     notifications, tray icon, error log, in-memory run registry
   tauri.conf.json, icons/, capabilities/
 crates/deptide-cli/  the command line front end (binary `deptide-cli`): clap
-                     arguments, a terminal ProgressSink, scan / run / exec / history
+                     arguments, a terminal ProgressSink, scan / run / exec / deps /
+                     history
 ```
 
 Layering inside Rust is a compiler rule: `deptide-core` has no Tauri
@@ -87,9 +104,10 @@ trait, which is how a run reports progress, so the tests in
    outcomes is written next to the transcript as JSON, and a `finished` event
    carries it to the UI.
 
-Aborting sets a flag and kills every registered process tree (`taskkill /T` on
-Windows, a process-group signal elsewhere). Jobs that were still waiting end
-up as `skipped`, the job that was killed too, and the run is marked aborted.
+Aborting sets a flag and kills every registered process tree (the command's
+Job Object on Windows, a process-group signal elsewhere). Jobs that were still
+waiting end up as `skipped`, the job that was killed too, and the run is marked
+aborted.
 
 ## Why the frontend never touches the file system
 

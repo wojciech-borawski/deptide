@@ -1,4 +1,5 @@
-use crate::domain::{JobStatus, RunProjectSummary, RunSummary};
+use crate::domain::{AuditCounts, JobStatus, RunProjectSummary, RunSummary};
+use crate::execution::audit::{audit_columns, audit_totals};
 use crate::execution::verify::short_integrity;
 use crate::util::time::format_duration;
 
@@ -50,6 +51,62 @@ fn installed_line(project: &RunProjectSummary) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+const AUDIT_HEADERS: [&str; 7] = [
+    "Project", "Critical", "High", "Moderate", "Low", "Info", "Total",
+];
+const ALL_PROJECTS: &str = "All projects";
+
+fn audit_rows(summary: &RunSummary) -> Vec<(String, AuditCounts)> {
+    let mut rows: Vec<(String, AuditCounts)> = summary
+        .projects
+        .iter()
+        .filter_map(|project| project.audit.map(|counts| (project.name.clone(), counts)))
+        .collect();
+    if let Some(totals) = audit_totals(rows.iter().map(|(_, counts)| counts)) {
+        rows.push((ALL_PROJECTS.to_string(), totals));
+    }
+    rows
+}
+
+fn markdown_audit(summary: &RunSummary) -> String {
+    let rows = audit_rows(summary);
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("\n## Audit\n\n");
+    out.push_str(&format!("| {} |\n", AUDIT_HEADERS.join(" | ")));
+    out.push_str(&format!("|{}\n", " --- |".repeat(AUDIT_HEADERS.len())));
+    for (name, counts) in rows {
+        let cells: Vec<String> = audit_columns(&counts).iter().map(u32::to_string).collect();
+        out.push_str(&format!("| {name} | {} |\n", cells.join(" | ")));
+    }
+    out
+}
+
+fn html_audit(summary: &RunSummary) -> String {
+    let rows = audit_rows(summary);
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    let headers: String = AUDIT_HEADERS
+        .iter()
+        .map(|header| format!("<th>{header}</th>"))
+        .collect();
+    let body: String = rows
+        .iter()
+        .map(|(name, counts)| {
+            let cells: String = audit_columns(counts)
+                .iter()
+                .map(|count| format!("<td>{count}</td>"))
+                .collect();
+            format!("<tr><td>{}</td>{cells}</tr>", escape_html(name))
+        })
+        .collect();
+    format!("<h2>Audit</h2><table><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>")
 }
 
 fn detail_line(project: &RunProjectSummary) -> String {
@@ -122,6 +179,8 @@ pub fn render_markdown(summary: &RunSummary) -> String {
         out.push_str(&format!("- {}: {}\n", project.name, timings.join(", ")));
     }
 
+    out.push_str(&markdown_audit(summary));
+
     if let Some(log_file) = &summary.log_file {
         out.push_str(&format!("\nTranscript: `{log_file}`\n"));
     }
@@ -159,7 +218,7 @@ td,th{{border-bottom:1px solid #e5e7eb;padding:6px 8px;text-align:left;vertical-
 .ok{{color:#15803d}}.warning{{color:#b45309}}.failed{{color:#b91c1c}}.skipped{{color:#6b7280}}.total{{font-size:28px;font-weight:700}}</style></head><body>\
 <h1>Deptide run: {label}</h1><p>{outcome}</p><p class=\"total\">{total}</p><p>{busy} of npm work across {concurrency} parallel · {started} → {finished}</p>\
 <p>Packages: {packages}</p><table><thead><tr><th>Project</th><th>Status</th><th>Time</th><th>Installed</th><th>Notes</th></tr></thead><tbody>{rows}</tbody></table>\
-{log}</body></html>",
+{audit}{log}</body></html>",
         label = escape_html(&summary.label),
         outcome = escape_html(&outcome_line(summary)),
         total = format_duration(summary.total_duration_ms),
@@ -169,6 +228,7 @@ td,th{{border-bottom:1px solid #e5e7eb;padding:6px 8px;text-align:left;vertical-
         finished = escape_html(&summary.finished_at),
         packages = escape_html(&summary.packages.join(", ")),
         rows = rows,
+        audit = html_audit(summary),
         log = summary
             .log_file
             .as_deref()

@@ -1,5 +1,5 @@
 use deptide_core::error::AppResult;
-use deptide_core::execution::list_summaries;
+use deptide_core::execution::{list_summaries, run_name};
 use deptide_core::util::time::format_duration;
 use deptide_core::workspace::Workspace;
 
@@ -26,12 +26,17 @@ pub fn execute(args: HistoryArgs) -> AppResult<ExitCode> {
             "ok".to_string()
         };
         println!(
-            "{}  {:<32} {:>3} projects  {:>9}  {}",
+            "{}  {:<32} {:>3} projects  {:>9}  {:<12}  {}",
             &summary.started_at[..16.min(summary.started_at.len())],
             summary.label,
             summary.project_count,
             format_duration(summary.total_duration_ms),
-            outcome
+            outcome,
+            summary
+                .log_file
+                .as_deref()
+                .map(run_name)
+                .unwrap_or_default()
         );
     }
 

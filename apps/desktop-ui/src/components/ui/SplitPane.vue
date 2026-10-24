@@ -168,7 +168,7 @@ function stopDragging(): void {
   flex: 1 1 0;
 }
 
-.stacked .start {
+.stacked .start:not(:only-child) {
   flex: 0 1 35%;
 }
 

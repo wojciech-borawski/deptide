@@ -1,13 +1,24 @@
 mod config;
+mod dependencies;
 mod package;
 mod project;
+mod reason;
 mod run;
 
-pub use config::{Settings, UpdateConfig, DEFAULT_CONCURRENCY, DEFAULT_SCAN_DEPTH};
-pub use package::{DependencyCandidate, DependencySection, PackageSpec};
-pub use project::{ConfiguredProject, DetectedProject, PackageManifest, ProjectKind};
+pub use config::{ProjectGroup, Settings, UpdateConfig, DEFAULT_CONCURRENCY, DEFAULT_SCAN_DEPTH};
+pub use dependencies::{
+    CopyScope, DependencyDrift, DependencyGraph, DriftCell, GraphEdge, GraphNode, InstalledCopy,
+    LatestVersion, LibraryDrift, PackageCopies, ProjectCopies,
+};
+pub use package::{DependencyCandidate, DependencySection, PackMode, PackageSpec};
+pub use project::{
+    ConfiguredProject, DeclaredDependencies, DetectedProject, PackageManifest, ProjectKind,
+};
+pub use reason::{LookupCause, Reason, ReasonPreview};
 pub use run::{
-    BumpWhen, DependencyChange, Diagnosis, ExecutionMode, InstalledPackage, Job, JobSnapshot,
-    JobStatus, RunPlan, RunProjectSummary, RunSnapshot, RunSummary, SavedRun, StepName, StepTiming,
-    VersionBump, VersionPolicy,
+    AuditCounts, BackedUpProject, BumpWhen, DependencyChange, Diagnosis, ExecutionMode,
+    InstalledPackage, Job, JobPreview, JobSnapshot, JobStatus, PackedLibrary, PackedTarball,
+    Packing, PlanPreview, ProjectRestore, RestoreOutcome, RunBackup, RunPlan, RunProjectSummary,
+    RunSnapshot, RunSummary, SavedRun, StepName, StepPreview, StepTiming, VersionBump,
+    VersionPolicy, VersionPreview,
 };

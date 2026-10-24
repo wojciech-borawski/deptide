@@ -23,6 +23,7 @@ const holds = [
   { file: "logs/", key: "workspace.logsFolder" },
   { file: "backups/", key: "workspace.backupsFolder" },
   { file: "transfers/", key: "workspace.transfersFolder" },
+  { file: "packs/", key: "workspace.packsFolder" },
 ];
 
 const features = ["update", "safety", "insight", "transfer", "terminal", "comfort"];

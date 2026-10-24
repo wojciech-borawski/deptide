@@ -67,9 +67,11 @@ onMounted(() => {
         <ProjectPickerList
           class="scroll"
           :projects="filter.visible.value"
+          :available="projects"
           :selected="transfer.copyProjects"
           :empty-text="t('projects.noMatch')"
           @toggle="selection.toggle"
+          @select="transfer.setCopyProjects"
         />
       </section>
 

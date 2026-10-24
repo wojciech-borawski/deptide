@@ -9,6 +9,8 @@ pub const RUNS_DIRECTORY: &str = "runs";
 pub const LOGS_DIRECTORY: &str = "logs";
 pub const BACKUPS_DIRECTORY: &str = "backups";
 pub const TRANSFERS_DIRECTORY: &str = "transfers";
+pub const PACKS_DIRECTORY: &str = "packs";
+pub const LOCKS_DIRECTORY: &str = "locks";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
@@ -67,18 +69,28 @@ impl Workspace {
         self.root.join(TRANSFERS_DIRECTORY)
     }
 
+    pub fn packs_directory(&self) -> PathBuf {
+        self.root.join(PACKS_DIRECTORY)
+    }
+
     pub fn logs_directory(&self) -> PathBuf {
         self.root.join(LOGS_DIRECTORY)
     }
 
+    pub fn locks_directory(&self) -> PathBuf {
+        self.root.join(LOCKS_DIRECTORY)
+    }
+
     /// The folders Deptide itself writes into. They can hold `package.json`
-    /// copies (backups, staged transfers) that must not be detected as projects.
+    /// copies (backups, staged transfers, packed tarballs) that must not be detected as projects.
     pub fn internal_directories(&self) -> Vec<PathBuf> {
         vec![
             self.backups_directory(),
             self.transfers_directory(),
+            self.packs_directory(),
             self.logs_directory(),
             self.runs_directory(),
+            self.locks_directory(),
         ]
     }
 

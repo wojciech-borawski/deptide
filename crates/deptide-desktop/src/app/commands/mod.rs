@@ -1,3 +1,4 @@
+mod dependencies;
 mod misc;
 mod run;
 mod scan;
@@ -6,6 +7,7 @@ mod workspace;
 
 use deptide_core::error::{AppError, AppResult};
 
+pub use dependencies::*;
 pub use misc::*;
 pub use run::*;
 pub use scan::*;

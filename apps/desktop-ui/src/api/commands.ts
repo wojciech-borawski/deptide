@@ -5,15 +5,22 @@ import type {
   ClipboardContents,
   ClipboardDownload,
   CopyResult,
+  CopyScope,
+  DependencyDrift,
+  DependencyGraph,
   DetectedProject,
   ExtractProgress,
+  PlanPreview,
+  ProjectCopies,
   ProjectInspection,
+  ProjectRestore,
   ReceiveFileContents,
   ReceivePlan,
   ReceiveRequest,
   ReceiveResult,
   ReceiveSelection,
   RecentWorkspace,
+  RunBackup,
   RunPlan,
   RunSnapshot,
   RunStartOutcome,
@@ -74,8 +81,32 @@ export function inspectProjects(root: string, projectNames: string[]): Promise<P
   return call("inspect_projects", { root, projectNames });
 }
 
+export function readDependencyDrift(root: string, checkLatest: boolean, requestId: number): Promise<DependencyDrift> {
+  return call("read_dependency_drift", { root, checkLatest, requestId });
+}
+
+export function readDependencyGraph(root: string): Promise<DependencyGraph> {
+  return call("read_dependency_graph", { root });
+}
+
+export function findInstalledCopies(root: string, scope: CopyScope, requestId: number): Promise<ProjectCopies[]> {
+  return call("find_installed_copies", { root, scope, requestId });
+}
+
+export function openDependencyRequest(): Promise<number> {
+  return call("open_dependency_request");
+}
+
+export function cancelDependencyRequest(requestId: number): void {
+  invoke("cancel_dependency_request", { requestId }).catch(() => undefined);
+}
+
 export function startRun(root: string, plan: RunPlan): Promise<RunStartOutcome> {
   return call("start_run", { root, plan });
+}
+
+export function previewPlan(root: string, plan: RunPlan): Promise<PlanPreview> {
+  return call("preview_plan", { root, plan });
 }
 
 export function startCommandRun(
@@ -97,6 +128,14 @@ export function abortJob(runId: string, jobName: string): Promise<void> {
 
 export function restoreProject(runId: string, jobName: string): Promise<string[]> {
   return call("restore_project", { runId, jobName });
+}
+
+export function listRunBackups(root: string): Promise<RunBackup[]> {
+  return call("list_run_backups", { root });
+}
+
+export function restoreRunFiles(root: string, run: string, projects: string[]): Promise<ProjectRestore[]> {
+  return call("restore_run_files", { root, run, projects });
 }
 
 export function checkForUpdate(url: string): Promise<UpdateInfo> {

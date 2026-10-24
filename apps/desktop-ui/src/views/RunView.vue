@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
@@ -10,6 +10,7 @@ import LogPane from "@/components/run/LogPane.vue";
 import RunClock from "@/components/run/RunClock.vue";
 import RunStatusLine from "@/components/run/RunStatusLine.vue";
 import RerunDialog from "@/components/run/RerunDialog.vue";
+import RestoreRunDialog from "@/components/run/RestoreRunDialog.vue";
 import RunSummaryCard from "@/components/run/RunSummaryCard.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
@@ -18,6 +19,7 @@ import NoticeBanner from "@/components/ui/NoticeBanner.vue";
 import { describeError } from "@/composables/useAsyncAction";
 import { buildBaseline } from "@/lib/timing-baseline";
 import { routeNames } from "@/router";
+import { useRestoreStore } from "@/stores/restore";
 import { useRunStore } from "@/stores/run";
 import { useToastStore } from "@/stores/toasts";
 import { useWizardStore } from "@/stores/wizard";
@@ -33,6 +35,8 @@ const baseline = computed(() => buildBaseline(workspace.history, run.summary?.st
 const rerunOpen = ref(false);
 const rerunPreselected = ref<string[]>([]);
 const toasts = useToastStore();
+const restoreStore = useRestoreStore();
+const restoringAll = ref(false);
 
 const snapshot = computed(() => run.snapshot);
 const nowMs = computed(() => (snapshot.value ? snapshot.value.startedAtMs + run.elapsedMs : 0));
@@ -50,6 +54,7 @@ const restorable = computed(() =>
         )
         .map((job) => job.name),
 );
+const runBackup = computed(() => (run.isActive ? null : restoreStore.backupFor(run.summary)));
 const phaseLabel = computed(() => {
   const current = snapshot.value?.currentPhase;
   if (!current || !snapshot.value) return null;
@@ -66,7 +71,7 @@ function newRun(): void {
 
 function retryFailed(): void {
   if (!snapshot.value) return;
-  wizard.prefillRetry(snapshot.value);
+  wizard.prefillRetry(snapshot.value, run.lastPlan);
   void router.push({ name: routeNames.wizard });
 }
 
@@ -79,6 +84,18 @@ async function startRerun(projectNames: string[], steps: StepName[]): Promise<vo
   const outcome = await run.rerun(workspace.root, projectNames, steps);
   if (outcome) rerunOpen.value = false;
 }
+
+async function loadBackups(): Promise<void> {
+  if (!workspace.root) return;
+  try {
+    await restoreStore.load(workspace.root);
+  } catch (cause) {
+    toasts.push({ tone: "error", text: describeError(cause) });
+  }
+}
+
+onMounted(loadBackups);
+watch(() => run.summary?.logFile, loadBackups);
 
 async function restore(name: string): Promise<void> {
   try {
@@ -112,6 +129,16 @@ async function restore(name: string): Promise<void> {
           <button v-if="run.lastPlan" class="btn" type="button" @click="openRerun(failedNames)">
             <AppIcon name="refresh" :size="15" />
             {{ t("run.rerunProjects") }}
+          </button>
+          <button
+            v-if="runBackup"
+            class="btn"
+            type="button"
+            :title="t('run.restoreAllTitle')"
+            @click="restoringAll = true"
+          >
+            <AppIcon name="history" :size="15" />
+            {{ t("run.restoreAll") }}
           </button>
           <button
             v-if="failedNames.length"
@@ -181,6 +208,12 @@ async function restore(name: string): Promise<void> {
         :busy="run.starting"
         @close="rerunOpen = false"
         @start="startRerun"
+      />
+      <RestoreRunDialog
+        :open="restoringAll"
+        :backup="runBackup"
+        :label="snapshot.label"
+        @close="restoringAll = false"
       />
     </template>
   </div>

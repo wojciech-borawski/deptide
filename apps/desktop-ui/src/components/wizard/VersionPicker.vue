@@ -18,6 +18,7 @@ const { t } = useI18n();
 const base = computed(() => baseVersion(props.choice));
 const resolved = computed(() => resolveVersion(props.choice));
 const problem = computed(() => choiceProblem(props.choice));
+const packModeGroup = computed(() => `pack-mode-${props.choice.name}`);
 
 function setMode(mode: VersionMode, keepRange?: string): void {
   emit("patch", keepRange === undefined ? { mode } : { mode, keepRange });
@@ -79,6 +80,38 @@ function setMode(mode: VersionMode, keepRange?: string): void {
       <span class="hint">{{ t("version.keepHint") }}</span>
     </label>
 
+    <label v-if="props.choice.libraryProject" class="check option">
+      <input type="radio" :checked="props.choice.mode === 'pack'" @change="setMode('pack')" />
+      <span>{{ t("version.pack") }}</span>
+      <span class="hint">{{ t("version.packHint", { project: props.choice.libraryProject }) }}</span>
+    </label>
+    <span v-else-if="props.choice.ambiguousProjects.length" class="hint">{{
+      t("version.packAmbiguous", { projects: props.choice.ambiguousProjects.join(", ") })
+    }}</span>
+
+    <div v-if="props.choice.mode === 'pack'" class="pack-modes">
+      <label class="check option">
+        <input
+          type="radio"
+          :name="packModeGroup"
+          :checked="props.choice.packMode === 'no-save'"
+          @change="emit('patch', { packMode: 'no-save' })"
+        />
+        <span>{{ t("version.packNoSave") }}</span>
+        <span class="hint">{{ t("version.packNoSaveHint") }}</span>
+      </label>
+      <label class="check option">
+        <input
+          type="radio"
+          :name="packModeGroup"
+          :checked="props.choice.packMode === 'save'"
+          @change="emit('patch', { packMode: 'save' })"
+        />
+        <span>{{ t("version.packSave") }}</span>
+      </label>
+      <span v-if="props.choice.packMode === 'save'" class="badge badge-warn">{{ t("version.packSaveWarning") }}</span>
+    </div>
+
     <label class="check option">
       <input type="radio" :checked="props.choice.mode === 'manual'" @change="setMode('manual')" />
       <span>{{ t("version.exact") }}</span>
@@ -128,6 +161,14 @@ function setMode(mode: VersionMode, keepRange?: string): void {
 
 .manual {
   width: 200px;
+}
+
+.pack-modes {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-left: 24px;
 }
 
 .result {

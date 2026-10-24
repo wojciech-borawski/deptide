@@ -2,8 +2,8 @@ mod common;
 
 use common::TempDir;
 use deptide_core::domain::{
-    Diagnosis, ExecutionMode, InstalledPackage, JobStatus, PackageSpec, RunProjectSummary,
-    RunSummary, StepName, StepTiming,
+    AuditCounts, Diagnosis, ExecutionMode, InstalledPackage, JobStatus, PackageSpec,
+    RunProjectSummary, RunSummary, StepName, StepTiming,
 };
 use deptide_core::execution::{
     diagnose, render_html, render_markdown, short_integrity, verify_installed,
@@ -128,6 +128,7 @@ fn sample_summary() -> RunSummary {
                 diagnosis: None,
                 dependency_changes: vec![],
                 retries: 0,
+                audit: None,
             },
             RunProjectSummary {
                 name: "api".to_string(),
@@ -145,6 +146,7 @@ fn sample_summary() -> RunSummary {
                 }),
                 dependency_changes: vec![],
                 retries: 0,
+                audit: None,
             },
         ],
         ok_count: 1,
@@ -152,6 +154,7 @@ fn sample_summary() -> RunSummary {
         failed_count: 1,
         skipped_count: 0,
         aborted: false,
+        backup_folder: None,
     }
 }
 
@@ -170,4 +173,49 @@ fn reports_render_both_formats() {
     assert!(html.contains("<title>Deptide run: core update</title>"));
     assert!(html.contains("class=\"failed\""));
     assert!(html.contains("4m 12s"));
+}
+
+#[test]
+fn reports_list_the_audit_counts_per_project_and_in_total() {
+    let mut summary = sample_summary();
+    assert!(!render_markdown(&summary).contains("## Audit"));
+    assert!(!render_html(&summary).contains("<h2>Audit</h2>"));
+
+    summary.projects[0].audit = Some(AuditCounts {
+        critical: 1,
+        high: 2,
+        total: 3,
+        ..AuditCounts::default()
+    });
+    summary.projects[1].audit = Some(AuditCounts {
+        moderate: 1,
+        total: 1,
+        ..AuditCounts::default()
+    });
+
+    let markdown = render_markdown(&summary);
+    assert!(markdown.contains("## Audit"), "{markdown}");
+    assert!(
+        markdown.contains("| Project | Critical | High | Moderate | Low | Info | Total |"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("| web | 1 | 2 | 0 | 0 | 0 | 3 |"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("| api | 0 | 0 | 1 | 0 | 0 | 1 |"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("| All projects | 1 | 2 | 1 | 0 | 0 | 4 |"),
+        "{markdown}"
+    );
+
+    let html = render_html(&summary);
+    assert!(html.contains("<h2>Audit</h2>"), "{html}");
+    assert!(
+        html.contains("<tr><td>All projects</td><td>1</td><td>2</td><td>1</td><td>0</td><td>0</td><td>4</td></tr>"),
+        "{html}"
+    );
 }

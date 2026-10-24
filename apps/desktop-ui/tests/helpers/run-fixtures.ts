@@ -19,6 +19,7 @@ export function makeJob(name: string, overrides: Partial<JobSnapshot> = {}): Job
     dependencyChanges: [],
     retries: 0,
     backupAvailable: false,
+    audit: null,
     log: [],
     ...overrides,
   };

@@ -210,6 +210,23 @@ fn the_workspace_own_folders_are_never_detected_as_projects() {
     assert_eq!(names, vec!["apps/web"]);
 }
 
+#[test]
+fn the_scan_skips_the_workspace_packs_folder() {
+    let root = TempDir::new("scan-packs");
+    root.write("apps/web/package.json", &manifest("web", "1.0.0", &[]));
+    root.write(
+        "tool/packs/2026-10-22T09-30-00-core/package/package.json",
+        &manifest("core", "1.2.3", &[]),
+    );
+    let workspace = Workspace::open(root.join("tool")).unwrap();
+
+    let options = options(5).excluding(workspace.internal_directories());
+    let found = detect_projects(root.path(), &options);
+
+    let names: Vec<&str> = found.iter().map(|p| p.relative_path.as_str()).collect();
+    assert_eq!(names, vec!["apps/web"]);
+}
+
 fn consumers_with_sections() -> Vec<deptide_core::domain::DetectedProject> {
     let root = TempDir::new("scan-sections");
     root.write(

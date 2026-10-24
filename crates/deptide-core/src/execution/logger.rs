@@ -1,9 +1,9 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use crate::domain::RunSummary;
 use crate::error::AppResult;
@@ -17,8 +17,39 @@ const MAX_STORED_LOGS: usize = 50;
 
 pub struct RunLogger {
     file: Mutex<File>,
+    run_name: String,
     log_file: PathBuf,
     summary_file: PathBuf,
+}
+
+pub(crate) fn stamped_run_name(moment: DateTime<Utc>, label: &str) -> String {
+    let suffix = slugify(label);
+    if suffix.is_empty() {
+        file_stamp(moment)
+    } else {
+        format!("{}-{suffix}", file_stamp(moment))
+    }
+}
+
+fn claim_run_name(logs_directory: &Path, base: &str) -> AppResult<(String, File)> {
+    let mut sequence = 1;
+    loop {
+        let name = if sequence == 1 {
+            base.to_string()
+        } else {
+            format!("{base}-{sequence}")
+        };
+        let claimed = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(logs_directory.join(format!("{name}.{LOG_EXTENSION}")));
+
+        match claimed {
+            Ok(file) => return Ok((name, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => sequence += 1,
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 impl RunLogger {
@@ -26,23 +57,14 @@ impl RunLogger {
         fs::create_dir_all(logs_directory)?;
 
         let started_at = Utc::now();
-        let suffix = slugify(label);
-        let base = if suffix.is_empty() {
-            file_stamp(started_at)
-        } else {
-            format!("{}-{suffix}", file_stamp(started_at))
-        };
-
-        let log_file = logs_directory.join(format!("{base}.{LOG_EXTENSION}"));
-        let summary_file = logs_directory.join(format!("{base}.{SUMMARY_EXTENSION}"));
-
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file)?;
+        let (run_name, file) =
+            claim_run_name(logs_directory, &stamped_run_name(started_at, label))?;
+        let log_file = logs_directory.join(format!("{run_name}.{LOG_EXTENSION}"));
+        let summary_file = logs_directory.join(format!("{run_name}.{SUMMARY_EXTENSION}"));
 
         let logger = Self {
             file: Mutex::new(file),
+            run_name,
             log_file,
             summary_file,
         };
@@ -54,6 +76,10 @@ impl RunLogger {
         logger.note("");
 
         Ok(logger)
+    }
+
+    pub fn run_name(&self) -> &str {
+        &self.run_name
     }
 
     pub fn log_file(&self) -> &Path {

@@ -13,11 +13,19 @@ pub struct UpdateConfig {
     #[serde(default)]
     pub projects: Vec<ConfiguredProject>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<ProjectGroup>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub install_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audit_fix_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transfer_ignore: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectGroup {
+    pub name: String,
+    pub projects: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

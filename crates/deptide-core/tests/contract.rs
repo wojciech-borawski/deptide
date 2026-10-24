@@ -1,6 +1,7 @@
 use deptide_core::domain::{
-    Diagnosis, ExecutionMode, InstalledPackage, Job, JobSnapshot, JobStatus, PackageSpec, RunPlan,
-    StepName, StepTiming, VersionPolicy,
+    Diagnosis, ExecutionMode, InstalledPackage, Job, JobPreview, JobSnapshot, JobStatus,
+    PackageSpec, PlanPreview, Reason, RunPlan, StepName, StepPreview, StepTiming, VersionBump,
+    VersionPolicy, VersionPreview,
 };
 use deptide_core::execution::{JobState, RunEvent, RunOptions, RunState};
 
@@ -23,6 +24,7 @@ fn job_snapshot_uses_the_camel_case_names_the_frontend_expects() {
         depends_on: vec!["core".to_string()],
         command: None,
         version: VersionPolicy::default(),
+        packing: None,
     });
     state.record_step(StepName::ForceInstall, 5);
     state.installed.push(InstalledPackage {
@@ -96,6 +98,7 @@ fn run_events_are_tagged_for_the_frontend_switch() {
         dependency_changes: vec![],
         retries: 0,
         backup_available: false,
+        audit: None,
         log: vec![],
     };
 
@@ -171,4 +174,98 @@ fn run_plan_and_snapshot_round_trip_through_json() {
         );
     }
     assert_eq!(json["mode"], "per-step");
+}
+
+#[test]
+fn plan_previews_use_the_names_the_review_step_expects() {
+    let job = |name: &str, version| JobPreview {
+        name: name.to_string(),
+        depends_on: vec!["core".to_string()],
+        steps: vec![StepPreview {
+            step: StepName::AuditReport,
+            commands: vec!["npm audit --json".to_string()],
+            notes: Vec::new(),
+        }],
+        version: Some(version),
+    };
+    let preview = PlanPreview {
+        jobs: vec![
+            job(
+                "web",
+                VersionPreview::Bump {
+                    current: Some("1.4.2".to_string()),
+                    next: "1.5.0".to_string(),
+                    level: VersionBump::Minor,
+                    reason: None,
+                },
+            ),
+            job(
+                "api",
+                VersionPreview::Skip {
+                    current: Some("2.0.1".to_string()),
+                    level: VersionBump::Patch,
+                    reason: Reason::ChangedOnBranch {
+                        version: Some("2.0.1".to_string()),
+                        from: "2.0.0".to_string(),
+                        to: "2.0.1".to_string(),
+                        commit: "a1b2c3d".to_string(),
+                    }
+                    .into(),
+                },
+            ),
+            job(
+                "old",
+                VersionPreview::Fail {
+                    current: None,
+                    level: VersionBump::Major,
+                    reason: Reason::InvalidVersion { version: None }.into(),
+                },
+            ),
+        ],
+        missing: vec!["gone".to_string()],
+        without_packages: vec!["other".to_string()],
+        nothing_to_do: None,
+    };
+
+    let json = serde_json::to_value(&preview).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "jobs": [
+                {
+                    "name": "web",
+                    "dependsOn": ["core"],
+                    "steps": [{ "step": "audit-report", "commands": ["npm audit --json"], "notes": [] }],
+                    "version": { "decision": "bump", "current": "1.4.2", "next": "1.5.0", "level": "minor", "reason": null }
+                },
+                {
+                    "name": "api",
+                    "dependsOn": ["core"],
+                    "steps": [{ "step": "audit-report", "commands": ["npm audit --json"], "notes": [] }],
+                    "version": { "decision": "skip", "current": "2.0.1", "level": "patch", "reason": {
+                        "kind": "changedOnBranch",
+                        "params": { "version": "2.0.1", "from": "2.0.0", "to": "2.0.1", "commit": "a1b2c3d" },
+                        "text": "version 2.0.1 already changed on this branch (2.0.0 -> 2.0.1 in a1b2c3d)"
+                    } }
+                },
+                {
+                    "name": "old",
+                    "dependsOn": ["core"],
+                    "steps": [{ "step": "audit-report", "commands": ["npm audit --json"], "notes": [] }],
+                    "version": { "decision": "fail", "current": null, "level": "major", "reason": {
+                        "kind": "invalidVersion",
+                        "params": { "version": null },
+                        "text": "npm version cannot raise none"
+                    } }
+                }
+            ],
+            "missing": ["gone"],
+            "withoutPackages": ["other"],
+            "nothingToDo": null
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<PlanPreview>(json).unwrap(),
+        preview
+    );
 }

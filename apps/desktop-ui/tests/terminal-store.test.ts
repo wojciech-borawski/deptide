@@ -54,6 +54,19 @@ describe("terminal store", () => {
     expect(store.canStart).toBe(true);
   });
 
+  it("prepares a command for chosen projects without starting it", () => {
+    const store = useTerminalStore();
+    store.setProjects(["docs"]);
+    store.command = "git status";
+
+    store.prepareCommand(["web", "api", "web"], "npm dedupe");
+
+    expect(store.projectNames).toEqual(["web", "api"]);
+    expect(store.command).toBe("npm dedupe");
+    expect(store.canStart).toBe(true);
+    expect(backend.startCommandRun).not.toHaveBeenCalled();
+  });
+
   it("toggles projects in and out of the selection", () => {
     const store = useTerminalStore();
     store.setProjects(["web"]);

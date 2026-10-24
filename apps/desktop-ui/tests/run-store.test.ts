@@ -42,6 +42,7 @@ const plan: RunPlan = {
   label: "test",
   saveAs: null,
   version: { bump: "patch", when: "always" },
+  projectBumps: {},
 };
 
 function emit(event: RunEvent): void {

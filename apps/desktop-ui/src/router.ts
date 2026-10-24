@@ -5,6 +5,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 export const routeNames = {
   workspace: "workspace",
   wizard: "wizard",
+  dependencies: "dependencies",
   run: "run",
   transfer: "transfer",
   terminal: "terminal",
@@ -24,6 +25,11 @@ export const router = createRouter({
       path: "/wizard",
       name: routeNames.wizard,
       component: () => import("@/views/WizardView.vue"),
+    },
+    {
+      path: "/dependencies",
+      name: routeNames.dependencies,
+      component: () => import("@/views/DependenciesView.vue"),
     },
     {
       path: "/run",

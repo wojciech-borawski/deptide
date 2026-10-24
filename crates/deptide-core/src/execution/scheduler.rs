@@ -64,6 +64,24 @@ fn dependency_indices(context: &RunContext) -> Vec<Vec<usize>> {
         .collect()
 }
 
+struct JobSettled {
+    context: Arc<RunContext>,
+    gate: Arc<DependencyGate>,
+    index: usize,
+}
+
+impl Drop for JobSettled {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let job = &mut self.context.state().jobs[self.index];
+            job.end();
+            job.status = JobStatus::Failed;
+            job.error = "stopped by an internal error".to_string();
+        }
+        self.gate.mark_done(self.index);
+    }
+}
+
 fn failed_dependency(context: &RunContext, dependencies: &[usize]) -> Option<String> {
     let state = context.state();
 
@@ -93,9 +111,17 @@ where
 
         tasks.spawn(async move {
             gate.wait_for(&wait_on).await;
+            let _lock = context.project_lock(index);
+            let _settled = JobSettled {
+                context: context.clone(),
+                gate: gate.clone(),
+                index,
+            };
             let runner = JobRunner::new(context.clone(), index);
+            let already_ended = context.state().jobs[index].status.is_final();
 
             match failed_dependency(&context, &wait_on) {
+                _ if already_ended => {}
                 Some(dependency) => {
                     runner.mark_skipped_with_reason(format!(
                         "not run because {dependency} did not succeed"
@@ -107,8 +133,6 @@ where
                     }
                 }
             }
-
-            gate.mark_done(index);
         });
     }
 
@@ -128,11 +152,45 @@ fn set_phase(context: &Arc<RunContext>, phase: Option<StepName>) {
     });
 }
 
+struct ReleasedWhenDone<'a>(&'a JobRunner);
+
+impl Drop for ReleasedWhenDone<'_> {
+    fn drop(&mut self) {
+        self.0.release_project_lock();
+    }
+}
+
 async fn run_per_project(context: &Arc<RunContext>, limit: usize) {
     for_each_job(context, limit, |runner| async move {
+        let _release = ReleasedWhenDone(&runner);
         runner.run_all().await;
     })
     .await;
+}
+
+struct HeldProjectLocks<'a>(&'a RunContext);
+
+impl Drop for HeldProjectLocks<'_> {
+    fn drop(&mut self) {
+        self.0.release_project_locks();
+    }
+}
+
+async fn hold_project_locks(context: &Arc<RunContext>) -> HeldProjectLocks<'_> {
+    let locking = context.clone();
+    let taken = match tokio::task::spawn_blocking(move || locking.lock_projects()).await {
+        Ok(taken) => taken,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    };
+    context.keep_project_locks(&taken);
+    let held = HeldProjectLocks(context);
+    for (index, result) in taken.into_iter().enumerate() {
+        if let Err(reason) = result {
+            JobRunner::new(context.clone(), index)
+                .mark_skipped_with_reason(format!("not run because {reason}"));
+        }
+    }
+    held
 }
 
 async fn run_per_step(context: &Arc<RunContext>, limit: usize) {
@@ -181,9 +239,12 @@ fn finish(context: &Arc<RunContext>) -> RunSnapshot {
 pub async fn execute_run(context: Arc<RunContext>) -> RunSnapshot {
     let limit = context.options.concurrency.max(1) as usize;
 
-    match context.options.mode {
-        ExecutionMode::PerProject => run_per_project(&context, limit).await,
-        ExecutionMode::PerStep => run_per_step(&context, limit).await,
+    {
+        let _locks = hold_project_locks(&context).await;
+        match context.options.mode {
+            ExecutionMode::PerProject => run_per_project(&context, limit).await,
+            ExecutionMode::PerStep => run_per_step(&context, limit).await,
+        }
     }
 
     finish(&context)

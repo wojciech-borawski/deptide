@@ -1,4 +1,5 @@
-export type StepName = "uninstall" | "install" | "force-install" | "version" | "audit" | "build";
+export type StepName =
+  "uninstall" | "install" | "force-install" | "version" | "audit" | "audit-report" | "build" | "pack";
 
 export type VersionBump = "patch" | "minor" | "major";
 
@@ -22,11 +23,14 @@ export type ProjectKind = "library" | "application" | "unknown";
 
 export type JobStatus = "pending" | "running" | "ok" | "warn" | "failed" | "skipped";
 
+export type PackMode = "no-save" | "save";
+
 export interface PackageSpec {
   name: string;
   version: string;
   saveDev: boolean;
   savePeer: boolean;
+  pack?: PackMode;
 }
 
 /** A package.json dependency field, listed in grouping precedence order. */
@@ -43,6 +47,8 @@ export interface DependencyCandidate {
   usedBy: string[];
   isDevDependency: boolean;
   sections: DependencySection[];
+  libraryProject: string | null;
+  ambiguousProjects: string[];
 }
 
 export interface ConfiguredProject {
@@ -56,9 +62,15 @@ export interface ConfiguredProject {
 export interface UpdateConfig {
   packages: PackageSpec[];
   projects: ConfiguredProject[];
+  groups?: ProjectGroup[];
   installArgs?: string[];
   auditFixArgs?: string[];
   transferIgnore?: string[];
+}
+
+export interface ProjectGroup {
+  name: string;
+  projects: string[];
 }
 
 export interface Settings {
@@ -93,6 +105,8 @@ export interface SavedRun {
   mode: ExecutionMode;
   extraInstallArgs: string[];
   version: VersionPolicy;
+  /** Bump levels that differ from `version.bump`, by project name; absent in older files. */
+  projectBumps?: Record<string, VersionBump>;
 }
 
 export interface SavedRunFile {
@@ -141,6 +155,16 @@ export interface InstalledPackage {
   matches: boolean;
 }
 
+/** Vulnerability counts per severity from `npm audit --json`. */
+export interface AuditCounts {
+  info: number;
+  low: number;
+  moderate: number;
+  high: number;
+  critical: number;
+  total: number;
+}
+
 export interface RunProjectSummary {
   name: string;
   directory: string;
@@ -153,6 +177,8 @@ export interface RunProjectSummary {
   diagnosis: Diagnosis | null;
   dependencyChanges: DependencyChange[];
   retries: number;
+  /** Present when the project ran the audit report step; absent in older summaries. */
+  audit?: AuditCounts;
 }
 
 export interface RunSummary {
@@ -174,7 +200,24 @@ export interface RunSummary {
   failedCount: number;
   skippedCount: number;
   aborted: boolean;
+  backupFolder?: string;
 }
+
+export interface BackedUpProject {
+  name: string;
+  directory: string;
+  files: string[];
+}
+
+export interface RunBackup {
+  run: string;
+  logFile: string;
+  folder: string;
+  projects: BackedUpProject[];
+}
+
+export type ProjectRestore =
+  { name: string; outcome: "restored"; files: string[] } | { name: string; outcome: "failed"; error: string };
 
 export interface TransferProjectSummary {
   name: string;
@@ -409,6 +452,71 @@ export interface ProjectInspection {
   unreadable: string[];
 }
 
+export interface DriftCell {
+  project: string;
+  section: DependencySection;
+  declared: string;
+  installed: string | null;
+  outOfRange: boolean;
+  differs: boolean;
+  behind: boolean;
+}
+
+export interface LibraryDrift {
+  name: string;
+  localProject: string | null;
+  localVersion: string | null;
+  ambiguousProjects: string[];
+  newestInstalled: string | null;
+  latest: string | null;
+  latestError: string | null;
+  mismatch: boolean;
+  cells: DriftCell[];
+}
+
+export interface DependencyDrift {
+  projects: string[];
+  unreadable: string[];
+  libraries: LibraryDrift[];
+}
+
+export interface GraphNode {
+  name: string;
+  packageName: string | null;
+  layer: number;
+  dependsOn: string[];
+}
+
+export interface GraphEdge {
+  consumer: string;
+  library: string;
+  section: DependencySection;
+}
+
+export interface DependencyGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  cycles: string[][];
+}
+
+export type CopyScope = "libraries" | "all-packages";
+
+export interface InstalledCopy {
+  version: string | null;
+  path: string;
+}
+
+export interface PackageCopies {
+  name: string;
+  copies: InstalledCopy[];
+}
+
+export interface ProjectCopies {
+  project: string;
+  hasNodeModules: boolean;
+  packages: PackageCopies[];
+}
+
 export interface RunPlan {
   projectNames: string[];
   packages: PackageSpec[];
@@ -420,6 +528,85 @@ export interface RunPlan {
   label: string;
   saveAs: string | null;
   version: VersionPolicy;
+  /** Bump levels that differ from `version.bump`, by project name. */
+  projectBumps: Record<string, VersionBump>;
+}
+
+export type ReasonKind =
+  | "stillEqualsMain"
+  | "differsFromMain"
+  | "mainUnreadable"
+  | "notBumpedOnBranch"
+  | "changedUncommitted"
+  | "changedOnBranch"
+  | "branchUnknown"
+  | "lookupStopped"
+  | "invalidVersion"
+  | "manifestUnreadable"
+  | "noBuildScript"
+  | "saveExactDroppedForPeers"
+  | "noLibraries"
+  | "noProjectUsesPackages"
+  | "packedNotUninstalled"
+  | "builtBeforePacking"
+  | "packedLibraryMissing"
+  | "packedLibraryAmbiguous"
+  | "onlyPacked"
+  | "packedBeforeOwnChanges";
+
+/** Why git could not tell what the current branch did to the version; the `cause` of a `branchUnknown` reason. */
+export type LookupCause =
+  | "notARepository"
+  | "noCommits"
+  | "detachedHead"
+  | "onMainBranch"
+  | "noReflog"
+  | "noOtherBranch"
+  | "branchListFailed"
+  | "remoteListFailed"
+  | "commitListFailed"
+  | "shallowClone"
+  | "noSharedHistory"
+  | "noVersionAtBase"
+  | "noVersionInLastCommit"
+  | "historyUnreadable";
+
+/** Why a project or step is skipped or fails. `text` is the English line the run logs. */
+export interface ReasonPreview {
+  kind: ReasonKind;
+  /** The values the wording needs; a `version` of null means package.json has none, a `cause` is a {@link LookupCause}. */
+  params: Record<string, string | null>;
+  text: string;
+}
+
+/** What the version step will do to one project. `current` is null when package.json has no version. */
+export type VersionPreview =
+  | { decision: "bump"; current: string | null; next: string; level: VersionBump; reason: ReasonPreview | null }
+  | { decision: "skip"; current: string | null; level: VersionBump; reason: ReasonPreview }
+  | { decision: "fail"; current: string | null; level: VersionBump; reason: ReasonPreview };
+
+export interface StepPreview {
+  step: StepName;
+  /** npm command lines in run order, as the run logs them. */
+  commands: string[];
+  /** What the run logs for the step besides its commands. */
+  notes: ReasonPreview[];
+}
+
+export interface JobPreview {
+  name: string;
+  dependsOn: string[];
+  steps: StepPreview[];
+  version: VersionPreview | null;
+}
+
+/** What starting a plan would run, worked out without touching any project. */
+export interface PlanPreview {
+  jobs: JobPreview[];
+  missing: string[];
+  withoutPackages: string[];
+  /** The error starting the run would fail with, when no job is left. */
+  nothingToDo: ReasonPreview | null;
 }
 
 export interface RunStartOutcome {
@@ -448,6 +635,7 @@ export interface JobSnapshot {
   dependencyChanges: DependencyChange[];
   retries: number;
   backupAvailable: boolean;
+  audit: AuditCounts | null;
   log: string[];
 }
 
@@ -474,7 +662,15 @@ export type RunEvent =
   | { type: "phaseChanged"; runId: string; phase: StepName | null }
   | { type: "finished"; runId: string; snapshot: RunSnapshot };
 
-export const allSteps: readonly StepName[] = ["uninstall", "install", "force-install", "version", "audit", "build"];
+export const allSteps: readonly StepName[] = [
+  "uninstall",
+  "install",
+  "force-install",
+  "version",
+  "audit",
+  "audit-report",
+  "build",
+];
 
 export const fullSteps: readonly StepName[] = ["uninstall", "install", "audit", "build"];
 

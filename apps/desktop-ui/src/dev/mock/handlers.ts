@@ -1,7 +1,9 @@
 import type { Channel } from "@tauri-apps/api/core";
 
 import type {
+  CopyScope,
   ExtractProgress,
+  ProjectRestore,
   ReceiveRequest,
   ReceiveSelection,
   RunPlan,
@@ -12,9 +14,11 @@ import type {
   UpdateConfig,
 } from "@/api/types";
 import { cancelMockDownload, mockClipboard, mockDownload } from "./clipboard";
+import { mockDependencyDrift, mockDependencyGraph, mockInstalledCopies } from "./dependencies";
 import { registerListener } from "./events";
 import { mockFileStatus, mockReceivePlan, mockReceiveResult } from "./receive";
 import { mockReceiveFile } from "./receive-files";
+import { mockJobs, mockPreview } from "./preview";
 import { MockRun } from "./run";
 import {
   delay,
@@ -22,17 +26,19 @@ import {
   fakeRoot,
   projectsRoot,
   scannedProjects,
+  withConfiguredGroups,
   workspaceSnapshot,
   workspaceState,
 } from "./workspace";
 
 const runs = new Map<string, MockRun>();
+let lastDependencyRequest = 0;
 
-function launch(run: MockRun, missing: string[]) {
+function launch(run: MockRun, missing: string[], withoutPackages: string[] = []) {
   runs.set(run.id, run);
   const snapshot = JSON.parse(JSON.stringify(run.state)) as RunSnapshot;
   void run.execute();
-  return { runId: run.id, snapshot, missing, withoutPackages: [], savedRunPath: null };
+  return { runId: run.id, snapshot, missing, withoutPackages, savedRunPath: null };
 }
 
 function applyScan(args: Record<string, unknown>) {
@@ -47,8 +53,31 @@ function applyScan(args: Record<string, unknown>) {
     .filter((entry) => selected.has(entry.directory) && !config.projects.some((p) => p.path === entry.configPath))
     .map((entry) => ({ name: entry.proposedName, path: entry.configPath }));
   const removed = config.projects.filter((project) => !kept.includes(project)).map((p) => p.name);
-  workspaceState.config = { ...config, projects: [...kept, ...added] };
+  workspaceState.config = withConfiguredGroups({ ...config, projects: [...kept, ...added] });
   return { config: workspaceState.config, added: added.map((p) => p.name), removed };
+}
+
+function restoreRunFiles(run: string, projectNames: string[]): ProjectRestore[] {
+  const backup = workspaceState.backups.find((entry) => entry.run === run);
+  if (!backup) throw new Error(`Run ${run} has no backups left to restore`);
+  const busy = new Set(
+    [...runs.values()]
+      .filter((entry) => entry.state.finishedAtMs === null)
+      .flatMap((entry) => entry.state.jobs.map((job) => job.name)),
+  );
+
+  return projectNames.map((name): ProjectRestore => {
+    const project = backup.projects.find((entry) => entry.name === name);
+    if (!project) return { name, outcome: "failed", error: `This run holds no backup of ${name}` };
+    if (busy.has(name)) {
+      return {
+        name,
+        outcome: "failed",
+        error: "Not restored: a run in deptide is working in this project",
+      };
+    }
+    return { name, outcome: "restored", files: project.files };
+  });
 }
 
 function transferProjects(names: string[], stagedPrefix: string | null) {
@@ -84,7 +113,7 @@ export async function handleMockCommand(command: string, args: Record<string, un
       Object.assign(workspaceState.settings, args.settings as Settings);
       return workspaceState.settings;
     case "save_config":
-      workspaceState.config = args.config as UpdateConfig;
+      workspaceState.config = withConfiguredGroups(args.config as UpdateConfig);
       return workspaceSnapshot();
     case "scan_projects":
       await delay(500);
@@ -97,8 +126,29 @@ export async function handleMockCommand(command: string, args: Record<string, un
         candidates: dependencyCandidates(),
         unreadable: (args.projectNames as string[]).filter((name) => name.includes("Legacy")),
       };
-    case "start_run":
-      return launch(new MockRun(args.plan as RunPlan), []);
+    case "read_dependency_drift": {
+      const checkLatest = Boolean(args.checkLatest);
+      await delay(checkLatest ? 900 : 300);
+      return mockDependencyDrift(checkLatest);
+    }
+    case "read_dependency_graph":
+      await delay(250);
+      return mockDependencyGraph();
+    case "find_installed_copies":
+      await delay(700);
+      return mockInstalledCopies(args.scope as CopyScope);
+    case "open_dependency_request":
+      return ++lastDependencyRequest;
+    case "cancel_dependency_request":
+      return null;
+    case "preview_plan":
+      await delay(300);
+      return mockPreview(args.plan as RunPlan);
+    case "start_run": {
+      const plan = args.plan as RunPlan;
+      const { missing, withoutPackages } = mockJobs(plan);
+      return launch(new MockRun(plan), missing, withoutPackages);
+    }
     case "start_command_run": {
       const names = args.projectNames as string[];
       const plan: RunPlan = {
@@ -110,6 +160,7 @@ export async function handleMockCommand(command: string, args: Record<string, un
         dryRun: false,
         extraInstallArgs: [],
         version: { bump: "patch", when: "always" },
+        projectBumps: {},
         label: `cmd: ${String(args.command)}`,
         saveAs: null,
       };
@@ -126,6 +177,10 @@ export async function handleMockCommand(command: string, args: Record<string, un
       return null;
     case "restore_project":
       return ["package.json", "package-lock.json"];
+    case "list_run_backups":
+      return workspaceState.backups;
+    case "restore_run_files":
+      return restoreRunFiles(String(args.run), args.projects as string[]);
     case "check_for_update":
       await delay(300);
       return {

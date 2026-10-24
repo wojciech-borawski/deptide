@@ -5,7 +5,10 @@ clipboard, which remote desktop sessions share. It has two tabs.
 
 ## Copy
 
-1. Pick the projects (the list defaults to the wizard selection).
+1. Pick the projects (the list defaults to the wizard selection). The project
+   group chips above the list select a saved group, or add one with
+   Shift+click or Ctrl+click (see
+   [Project groups](wizard-and-runs.md#project-groups)).
 2. Review the ignore rules. Three layers apply, all in `.gitignore` syntax:
    - each project's own `.gitignore` (plus the global git excludes), which is
      what keeps `node_modules`, `dist` and similar out,

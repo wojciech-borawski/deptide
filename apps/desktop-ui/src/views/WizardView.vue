@@ -12,6 +12,7 @@ import StepOptions from "@/components/wizard/StepOptions.vue";
 import StepProjects from "@/components/wizard/StepProjects.vue";
 import StepReview from "@/components/wizard/StepReview.vue";
 import ActionButton from "@/components/ui/ActionButton.vue";
+import { isModalOpen } from "@/composables/useModal";
 import { routeNames } from "@/router";
 import { useRunStore } from "@/stores/run";
 import { useWizardStore, wizardSteps } from "@/stores/wizard";
@@ -58,7 +59,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (isTypingTarget(event.target)) return;
+  if (isModalOpen() || isTypingTarget(event.target)) return;
 
   if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
     if (event.target instanceof HTMLButtonElement) return;

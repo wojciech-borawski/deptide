@@ -10,6 +10,9 @@ export interface TestNode {
   focus: () => void;
   contains: (other: TestNode | null) => boolean;
   querySelector: (selector: string) => TestNode | null;
+  querySelectorAll: (selector: string) => TestNode[];
+  hasAttribute: (name: string) => boolean;
+  getAttribute: (name: string) => string | null;
   scrollIntoView: () => void;
 }
 
@@ -40,9 +43,20 @@ function isFocusable(node: TestNode): boolean {
   return focusableTags.has(node.tag) || node.props.tabindex !== undefined;
 }
 
+function hasAttribute(node: TestNode, name: string): boolean {
+  const value = node.props[name];
+  return value !== undefined && value !== null && value !== false;
+}
+
 function matches(node: TestNode, selector: string): boolean {
   const id = /^#([\w-]+)$/.exec(selector);
   if (id) return node.props.id === id[1];
+  if (/^[a-z]+$/.test(selector)) return node.tag === selector;
+  const tagWithAttribute = /^([a-z]*)\[([\w-]+)\]$/.exec(selector);
+  if (tagWithAttribute) {
+    const [, tag, name] = tagWithAttribute;
+    return (!tag || node.tag === tag) && hasAttribute(node, name ?? "");
+  }
   const attribute = /^\[([\w-]+)="([^"]*)"\]$/.exec(selector);
   return !!attribute && node.props[attribute[1] ?? ""] === attribute[2];
 }
@@ -66,10 +80,13 @@ function createNode(tag: string, text = ""): TestNode {
       for (let current = other; current; current = current.parent) if (current === node) return true;
       return false;
     },
-    querySelector: (selector) => {
+    querySelector: (selector) => node.querySelectorAll(selector)[0] ?? null,
+    querySelectorAll: (selector) => {
       const options = selector.split(",").map((part) => part.trim());
-      return descendants(node).find((child) => options.some((option) => matches(child, option))) ?? null;
+      return descendants(node).filter((child) => options.some((option) => matches(child, option)));
     },
+    hasAttribute: (name) => hasAttribute(node, name),
+    getAttribute: (name) => (hasAttribute(node, name) ? String(node.props[name]) : null),
     scrollIntoView: () => undefined,
   };
   return node;

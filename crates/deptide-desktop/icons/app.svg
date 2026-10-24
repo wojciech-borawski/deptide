@@ -1,20 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0f172a"/>
-      <stop offset="1" stop-color="#1e3a5f"/>
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ddd6fe"/>
+      <stop offset="1" stop-color="#a78bfa"/>
     </linearGradient>
-    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id="left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6d28d9"/>
+      <stop offset="1" stop-color="#4c1d95"/>
+    </linearGradient>
+    <linearGradient id="wave1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+    <linearGradient id="wave2" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#2dd4bf"/>
-      <stop offset="1" stop-color="#8b7cf6"/>
+      <stop offset="1" stop-color="#0f766e"/>
     </linearGradient>
   </defs>
-  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
-  <g fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" opacity="0.95">
-    <path d="M84 70 L128 46 L172 70 L128 94 Z"/>
-    <path d="M84 70 V118 L128 142 L172 118 V70"/>
-    <path d="M128 94 V142"/>
+  <g stroke="#2e1065" stroke-width="4" stroke-linejoin="round">
+    <path d="M128 14 L198 50 L128 86 L58 50 Z" fill="url(#top)"/>
+    <path d="M58 50 L128 86 L128 170 L58 134 Z" fill="url(#left)"/>
+    <path d="M128 86 L198 50 L198 134 L128 170 Z" fill="url(#right)"/>
   </g>
-  <path d="M28 172 C52 152 76 152 100 172 C124 192 148 192 172 172 C196 152 220 152 244 172 V232 C244 240 236 248 228 248 H44 C36 248 28 240 28 232 Z" fill="url(#wave)" opacity="0.95"/>
-  <path d="M28 196 C52 176 76 176 100 196 C124 216 148 216 172 196 C196 176 220 176 244 196" fill="none" stroke="#0f172a" stroke-width="10" stroke-linecap="round" opacity="0.55"/>
+  <path d="M20 168 C52 138 88 138 128 164 C168 190 204 190 236 160" fill="none" stroke="url(#wave1)" stroke-width="26" stroke-linecap="round"/>
+  <path d="M36 220 C66 196 96 196 128 216 C160 236 190 236 220 212" fill="none" stroke="url(#wave2)" stroke-width="22" stroke-linecap="round"/>
 </svg>

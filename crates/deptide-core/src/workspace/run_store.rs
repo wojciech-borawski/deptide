@@ -56,7 +56,9 @@ pub fn list_runs(workspace: &Workspace) -> Vec<SavedRunFile> {
         })
         .filter_map(|path| {
             let run = read_json::<SavedRun>(&path).ok().flatten()?;
-            if run.packages.is_empty() {
+            let runnable =
+                !run.packages.is_empty() || run.steps.iter().any(|step| !step.changes_packages());
+            if !runnable {
                 return None;
             }
 

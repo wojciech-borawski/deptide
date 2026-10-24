@@ -6,8 +6,8 @@ use serde::Serialize;
 
 use super::steps::ManifestEntry;
 use crate::domain::{
-    DependencyChange, Diagnosis, ExecutionMode, InstalledPackage, Job, JobSnapshot, JobStatus,
-    RunProjectSummary, RunSnapshot, RunSummary, StepName, StepTiming,
+    AuditCounts, DependencyChange, Diagnosis, ExecutionMode, InstalledPackage, Job, JobSnapshot,
+    JobStatus, RunProjectSummary, RunSnapshot, RunSummary, StepName, StepTiming,
 };
 use crate::util::time::{iso_timestamp, now_ms};
 
@@ -64,6 +64,7 @@ pub struct JobState {
     pub diagnosis: Option<Diagnosis>,
     pub dependency_changes: Vec<DependencyChange>,
     pub retries: u32,
+    pub audit: Option<AuditCounts>,
     pub backup_directory: Option<PathBuf>,
     /// The packages' `package.json` entries from before the first package step, until restored.
     pub saved_entries: Option<Vec<ManifestEntry>>,
@@ -87,6 +88,7 @@ impl JobState {
             diagnosis: None,
             dependency_changes: Vec::new(),
             retries: 0,
+            audit: None,
             backup_directory: None,
             saved_entries: None,
         }
@@ -143,6 +145,7 @@ impl JobState {
             dependency_changes: self.dependency_changes.clone(),
             retries: self.retries,
             backup_available: self.backup_directory.is_some(),
+            audit: self.audit,
             log: if include_log {
                 self.log.clone()
             } else {
@@ -164,6 +167,7 @@ impl JobState {
             diagnosis: self.diagnosis.clone(),
             dependency_changes: self.dependency_changes.clone(),
             retries: self.retries,
+            audit: self.audit,
         }
     }
 }
@@ -185,6 +189,7 @@ pub struct RunState {
     pub aborted: bool,
     pub jobs: Vec<JobState>,
     pub summary: Option<RunSummary>,
+    pub backup_folder: Option<String>,
 }
 
 impl RunState {
@@ -205,6 +210,7 @@ impl RunState {
             aborted: false,
             jobs: jobs.into_iter().map(JobState::new).collect(),
             summary: None,
+            backup_folder: None,
         }
     }
 
@@ -261,6 +267,7 @@ impl RunState {
             failed_count: count(JobStatus::Failed),
             skipped_count: count(JobStatus::Skipped),
             aborted,
+            backup_folder: self.backup_folder.clone(),
         };
 
         self.summary = Some(summary.clone());

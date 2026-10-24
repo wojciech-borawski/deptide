@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { JobSnapshot, StepName } from "@/api/types";
+import AuditBadges from "@/components/run/AuditBadges.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import StatusBadge from "@/components/ui/StatusBadge.vue";
 import { useCountedNoun } from "@/composables/useCountedNoun";
@@ -34,7 +35,9 @@ const stepColors: Record<StepName, string> = {
   "force-install": "var(--ok)",
   version: "var(--violet)",
   audit: "var(--warn)",
+  "audit-report": "var(--failed)",
   build: "var(--running)",
+  pack: "var(--ok)",
 };
 
 const longest = computed(() => Math.max(1, ...props.jobs.map((job) => liveDuration(job))));
@@ -138,6 +141,7 @@ function canRestore(job: JobSnapshot): boolean {
         <span class="row wrap">
           <span v-if="slowBadge(job)" class="badge badge-warn small">{{ slowBadge(job) }}</span>
           <span v-if="job.retries" class="badge small">{{ t("run.retried", { count: job.retries }) }}</span>
+          <AuditBadges v-if="job.audit" :counts="job.audit" />
           <span v-if="job.dependencyChanges.length" class="badge badge-violet small">
             {{
               t("run.changes", {

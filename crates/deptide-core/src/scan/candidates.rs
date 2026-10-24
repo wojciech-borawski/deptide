@@ -54,6 +54,8 @@ pub fn collect_dependency_candidates(
                         used_by: Vec::new(),
                         is_dev_dependency: true,
                         sections: Vec::new(),
+                        library_project: None,
+                        ambiguous_projects: Vec::new(),
                     });
                     candidates.len() - 1
                 }

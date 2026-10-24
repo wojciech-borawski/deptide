@@ -14,19 +14,19 @@ libssl-dev libayatana-appindicator3-dev librsvg2-dev`. The tray icon needs
 
 ## Commands
 
-| command              | what it does                                                                    |
-| -------------------- | ------------------------------------------------------------------------------- |
-| `npm install`        | installs the frontend and the Tauri CLI                                         |
-| `npm run dev`        | starts Vite and the Tauri window with hot reload                                |
-| `npm run build`      | type-checks, bundles the frontend and builds the installer                      |
-| `npm run web:mock`   | the UI alone in a browser at http://localhost:1420, backed by an in-memory fake |
-| `npm run typecheck`  | `vue-tsc` over the frontend and the tests                                       |
-| `npm test`           | Vitest suite in `apps/desktop-ui/tests/`                                        |
-| `npm run lint`       | ESLint over the frontend package (`lint:fix` applies fixes)                     |
-| `npm run format`     | Prettier over the frontend, scripts and docs (`format:check` only reports)      |
-| `npm run check:rust` | `cargo fmt --check`, Clippy with warnings as errors, `cargo test`               |
-| `npm run check`      | everything above in one go; must be green before a change is done               |
-| `npm run test:rust`  | Cargo integration tests in `crates/*/tests/`                                    |
+| command                  | what it does                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `npm install`            | installs the frontend and the Tauri CLI                                         |
+| `npm run dev`            | starts Vite and the Tauri window with hot reload                                |
+| `npm run build`          | type-checks, bundles the frontend and builds the installer                      |
+| `npm run web:mock`       | the UI alone in a browser at http://localhost:1420, backed by an in-memory fake |
+| `npm run typecheck`      | `vue-tsc` over the frontend and the tests                                       |
+| `npm test`               | Vitest suite in `apps/desktop-ui/tests/`                                        |
+| `npm run lint`           | ESLint over the frontend package (`lint:fix` applies fixes)                     |
+| `npm run format`         | Prettier over the frontend, scripts and docs (`format:check` only reports)      |
+| `npm run check:rust`     | `cargo fmt --check`, Clippy with warnings as errors, `cargo test`               |
+| `npm run check`          | everything above in one go; must be green before a change is done               |
+| `cargo test --workspace` | every Rust test: unit tests in the sources and `crates/*/tests/`                |
 
 If `npm install` stops with `Cannot read properties of null (reading
 'edgesOut')`, that is an npm resolver bug triggered by a peer range; run
@@ -46,6 +46,9 @@ of the address (http://localhost:1420/?clipboard=virtual) for two folders from
 a remote desktop that download in about two seconds, or
 `?clipboard=virtual-fail` for a download that fails with "The clipboard
 changed, analyze again" partway through.
+
+On the Dependencies screen, `?deps=cycle` adds two projects that depend on each
+other to the mock graph, so the cycle warning can be checked.
 
 ## Tests
 
@@ -72,14 +75,31 @@ changed, analyze again" partway through.
   install a real version need network access and are marked `#[ignore]`; run
   them on demand with `cargo test -p deptide-core --test npm_real -- --ignored`.
 
+- `crates/deptide-core/tests/semver.rs` takes its expected values from
+  node-semver 7.7.4, the copy bundled with npm 10.9.8.
+
+- `crates/deptide-core/tests/latest_lookup.rs` puts a fake `npm` first on
+  PATH, in a temporary folder shared by the running tests of that file and
+  removed when the last of them ends. It answers
+  `npm view <name> version --json` with "1.2.3" after 300 ms, never answers
+  for names starting with `hang-`, and logs each start to `<name>.events`
+  beside itself.
+
 - `crates/deptide-core/tests/clipboard_real.rs` and `clipboard_virtual.rs` use
   the real system clipboard and are marked `#[ignore]`. `clipboard_virtual.rs`
   puts a fake file source on it, the way a remote desktop client does. Run
   them on Windows with
   `cargo test -p deptide-core --test clipboard_real --test clipboard_virtual -- --ignored --test-threads=1`.
 
-Keep new tests in those folders. Source files carry no comments by design;
-explanations belong in this folder.
+Keep new tests in those folders. The exception is a test that needs a private
+seam no public interface reaches, such as the manifest reader of the
+duplicate walk or the late process registration in `execution/command.rs`:
+it goes in a `#[cfg(test)] mod tests` at the end of that source file, as in
+`dependencies/copies.rs`, `execution/manifest.rs` and `transfer/merge.rs`.
+Source files carry no comments by design; explanations belong in this folder.
+The one exception is doc comments: a file that already documents a kind of
+declaration with doc comments may keep them and add more on declarations of
+the same kind.
 
 ## Adding a Tauri command
 
@@ -108,6 +128,67 @@ appended to `deptide-errors.log` in the per-user app log directory
 through the `log_client_error` command; the panic hook is installed in
 `app/error_log.rs` during setup.
 
+Release builds use `panic = "abort"` to keep the binaries small, so a panic
+ends the process. Both the CLI and the desktop app call
+`deptide_core::execution::install_crash_hook`, which kills the process tree of
+every running command before the process aborts. Development and test builds
+unwind, the hook does nothing there, and the scheduler fails only the
+panicking job.
+
+The hook works on a fixed table of 1024 slots in `execution/process_tree.rs`,
+without locks or heap allocation. A command takes a slot before it is spawned
+and fails with `not started because 1024 commands are already running` when
+none is free. When the hook runs, it closes admission first, waits up to 2
+seconds for commands that are being started, and then claims every slot with
+an atomic swap. It kills only the Job Objects or process groups it claimed. No
+thread ever waits on the crash: an owner that retires its tree while the crash
+is under way, or finds its slot claimed, leaves the token in the slot, keeps
+its Job Object handle open (`ManuallyDrop`) or leaves its child unreaped
+(`mem::forget`), and returns. A `ProjectLock` dropped during the crash keeps
+its file, which the next run takes over as stale. An owner that retires before
+the crash flag is set clears its slot with a compare-and-swap of its own
+token, so a later scan does not see it. Each hook counts itself in a cleanup
+counter before it claims anything and leaves the count after its kills; before
+it returns to the panic runtime it waits, up to 5 seconds, until the counter is
+0, so a second panicking thread cannot abort the process while the first still
+holds claimed trees it has not killed.
+
+On Windows the slot is filled after the child joins its kill-on-close Job
+Object and before its suspended thread is resumed. When the crash refuses the
+start, the Job Object is closed, which kills the suspended child. On Linux and
+macOS `std` waits inside `spawn` until the child has called `exec`, so a
+`pre_exec` step cannot wait for the parent. Instead, a shared anonymous memory
+page holds one process number per slot and a crash flag. In `pre_exec` the
+child writes its process number, then reads the flag and fails the start if it
+is set. The hook sets the flag and then sends `SIGKILL` to the process group of
+every number it finds (`kill(-pid)`, never the single process), before it
+claims the slots. Either the child sees the flag or the hook sees the
+child. After `spawn`, the slot gets the process group id and the page entry is
+cleared. The child's exit is observed with `waitid(WNOWAIT)`, the slot is
+cleared, and only then is the child reaped.
+
+Remaining limits:
+
+- A Windows child that was not yet in its Job Object when the 2 seconds ran
+  out stays suspended after Deptide closes. It never runs its command.
+- On Linux and macOS, when `exec` fails after the child wrote its process
+  number, `std` reaps the child inside `spawn` and only then returns the error;
+  the page entry is cleared when the admission is dropped after that. `std`
+  offers no step between the failed `exec` and the reap, so this order cannot
+  be changed without replacing its `spawn`. The window lasts as long as the
+  parent thread takes to get from the reap to the drop, which has no upper
+  bound if the thread is descheduled. A crash inside it sends `SIGKILL` to the
+  process group with that number. That reaches another program only if the
+  number was reused and the new process leads a group of the same number.
+- The hook waits at most 2 seconds for starts and at most 5 seconds for other
+  panicking threads to finish their kills.
+- A previous panic hook that blocks still blocks the abort.
+
+The slot protocol and the Windows paths have unit tests in that file. The Unix
+paths have Linux-only tests there too. By decision, Linux and macOS ship with
+compilation as their only check: the Linux clippy check compiles those tests,
+and their runtime behavior is unverified.
+
 ## Portable build
 
 ```bash
@@ -125,9 +206,9 @@ additionally produces the MSI and NSIS installers under
 On Linux `npm run build:portable` copies a bare `release/Deptide` binary that
 needs the system webkit2gtk, and `npm run build:linux` produces an AppImage and
 a `.deb` under `target/release/bundle`. The code paths that differ
-between platforms are the process runner (`cmd.exe` versus `sh -c`, `taskkill`
-versus process-group signals) and the clipboard (`clipboard-win` versus
-`arboard`); everything else is shared.
+between platforms are the process runner (`cmd.exe` versus `sh -c`, a Job
+Object per command versus process-group signals) and the clipboard
+(`clipboard-win` versus `arboard`); everything else is shared.
 
 ## Translations
 
@@ -163,11 +244,25 @@ screen.
 deptide-cli scan C:\example\workspace --apply
 deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 -P web -P api --steps install,build
 deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 --steps install,version,build --bump minor --bump-when not-bumped-on-branch
+deptide-cli run C:\example\workspace --steps version,audit --bump patch --project-bump api=major --bump-when not-bumped-on-branch
+deptide-cli run C:\example\workspace --steps audit-report --preview
 deptide-cli exec C:\example\workspace --concurrency 4 -- git status
+deptide-cli deps C:\example\workspace --latest --duplicates
+deptide-cli groups C:\example\workspace
+deptide-cli run C:\example\workspace -p @acme/core@3.1.0-ABC-123 --group "frontend apps" -P api --steps install,build
 deptide-cli history C:\example\workspace
+deptide-cli restore C:\example\workspace 2026-10-22T09-30-00-acme-core-3.1.0 --project web
 ```
 
 Exit codes: 0 when every project is ok, 1 when any failed, 2 when the run was
 stopped with Ctrl+C, 3 for a usage or configuration error. `--quiet` hides the
 npm output and keeps the status lines; `--json` prints the run summary as JSON
-at the end.
+at the end. `--preview` prints the npm commands and version bumps each project
+would get and exits without running. Step names for `--steps` are
+`uninstall`, `install`, `force-install`, `version`, `audit`, `audit-report`
+and `build`. `deps` prints the library versions, the build order and, with
+`--duplicates`, the duplicate copies; see [Dependencies](dependencies.md). `groups` lists the project groups;
+`--group NAME` on `run` adds a group's projects to the `-P` ones, and an
+unknown group is a usage error naming the known ones. `history` ends each line
+with the run's name, which `restore` takes to put back the files that run
+backed up; see [Undo a run](wizard-and-runs.md#undo-a-run).

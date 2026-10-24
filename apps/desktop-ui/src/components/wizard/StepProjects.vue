@@ -103,9 +103,11 @@ function onScanApplied(summary: { added: string[]; removed: string[] }): void {
     <ProjectPickerList
       v-else
       :projects="filter.visible.value"
+      :available="workspace.projects"
       :selected="wizard.draft.projectNames"
       :empty-text="t('projects.noMatch')"
       @toggle="selection.toggle"
+      @select="wizard.setProjects"
     >
       <template #badges="{ project }">
         <span v-if="!project.exists" class="badge badge-failed">{{ t("projects.folderMissing") }}</span>

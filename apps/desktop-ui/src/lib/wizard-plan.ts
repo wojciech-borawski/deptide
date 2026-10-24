@@ -4,6 +4,7 @@ import type {
   DependencySection,
   ExecutionMode,
   PackageSpec,
+  PackMode,
   RunPlan,
   StepName,
   VersionBump,
@@ -11,7 +12,7 @@ import type {
 import { allSteps } from "@/api/types";
 import { applySuffix, isValidSuffix, stripPrerelease } from "./versions";
 
-export type VersionMode = "local" | "branch" | "suffix" | "keep" | "manual";
+export type VersionMode = "local" | "branch" | "suffix" | "keep" | "manual" | "pack";
 
 export interface PackageChoice {
   name: string;
@@ -27,6 +28,9 @@ export interface PackageChoice {
   keepRange: string;
   suffix: string;
   manualVersion: string;
+  libraryProject: string | null;
+  ambiguousProjects: string[];
+  packMode: PackMode;
 }
 
 export interface Problem {
@@ -45,6 +49,8 @@ export interface WizardDraft {
   extraInstallArgs: string;
   versionBump: VersionBump;
   bumpWhen: BumpWhen;
+  bumpPerProject: boolean;
+  projectBumps: Record<string, VersionBump>;
   label: string;
   saveRun: boolean;
   saveName: string;
@@ -74,6 +80,9 @@ export function createChoice(candidate: DependencyCandidate): PackageChoice {
     keepRange: firstRange,
     suffix: "",
     manualVersion: firstRange || candidate.localVersion || "",
+    libraryProject: candidate.libraryProject,
+    ambiguousProjects: [...candidate.ambiguousProjects],
+    packMode: "no-save",
   };
 }
 
@@ -94,6 +103,8 @@ export function resolveVersion(choice: PackageChoice): string {
       return choice.keepRange;
     case "manual":
       return choice.manualVersion.trim();
+    case "pack":
+      return choice.localVersion ?? "";
   }
 }
 
@@ -106,6 +117,7 @@ export function choiceProblem(choice: PackageChoice): string | null {
   }
 
   if (choice.mode === "local" && !choice.localVersion) return "wizard.problems.noLocal";
+  if (choice.mode === "pack" && !choice.libraryProject) return "wizard.problems.packNeedsProject";
   if (choice.mode === "branch" && (!choice.branchSuffix || !baseVersion(choice))) return "wizard.problems.noBranch";
   if (!resolveVersion(choice)) return "wizard.problems.versionRequired";
 
@@ -126,6 +138,7 @@ export function selectedPackages(draft: WizardDraft): PackageSpec[] {
       version: resolveVersion(choice),
       saveDev: choice.saveDev,
       savePeer: isPeerOnly(choice.sections),
+      ...(choice.mode === "pack" ? { pack: choice.packMode } : {}),
     });
   }
 
@@ -141,6 +154,25 @@ export function parseArguments(text: string): string[] {
     .split(/\s+/)
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+export function changesPackages(step: StepName): boolean {
+  return step === "uninstall" || step === "install" || step === "force-install";
+}
+
+export function projectBumpOverrides(draft: WizardDraft): Record<string, VersionBump> {
+  if (!draft.bumpPerProject || !draft.steps.includes("version")) return {};
+
+  return Object.fromEntries(
+    draft.projectNames
+      .map((name) => [name, projectBumpFor(draft, name)] as const)
+      .filter(([, bump]) => bump !== draft.versionBump),
+  );
+}
+
+export function projectBumpFor(draft: WizardDraft, name: string): VersionBump {
+  const own = Object.hasOwn(draft.projectBumps, name) ? draft.projectBumps[name] : undefined;
+  return own ?? draft.versionBump;
 }
 
 export function orderedSteps(steps: readonly StepName[]): StepName[] {
@@ -162,6 +194,7 @@ export function buildRunPlan(draft: WizardDraft): RunPlan {
     label,
     saveAs: draft.saveRun ? saveName : null,
     version: { bump: draft.versionBump, when: draft.bumpWhen },
+    projectBumps: projectBumpOverrides(draft),
   };
 }
 
@@ -194,7 +227,6 @@ export function draftProblems(draft: WizardDraft, stepIndex: number): Problem[] 
   }
 
   if (stepIndex >= 1) {
-    if (selectedPackages(draft).length === 0) problems.push({ key: "wizard.problems.selectLibrary" });
     for (const choice of draft.choices) {
       const problem = choiceProblem(choice);
       if (problem) problems.push({ key: problem, name: choice.name });
@@ -203,6 +235,9 @@ export function draftProblems(draft: WizardDraft, stepIndex: number): Problem[] 
 
   if (stepIndex >= 2) {
     if (draft.steps.length === 0) problems.push({ key: "wizard.problems.selectStep" });
+    if (selectedPackages(draft).length === 0 && draft.steps.some(changesPackages)) {
+      problems.push({ key: "wizard.problems.stepsNeedLibrary" });
+    }
     if (!Number.isInteger(draft.concurrency) || draft.concurrency < 1) {
       problems.push({ key: "wizard.problems.concurrency" });
     }

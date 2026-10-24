@@ -2,9 +2,9 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
-import type { ExecutionMode, StepName } from "@/api/types";
+import type { ExecutionMode, StepName, VersionBump } from "@/api/types";
 import { allBumps, allBumpWhens, allSteps, forceSteps, fullSteps, simpleSteps } from "@/api/types";
-import { orderedSteps, parseArguments } from "@/lib/wizard-plan";
+import { changesPackages, orderedSteps, parseArguments, projectBumpFor } from "@/lib/wizard-plan";
 import { useWizardStore } from "@/stores/wizard";
 
 const wizard = useWizardStore();
@@ -36,8 +36,22 @@ const activePreset = computed(
 
 const activeFlags = computed(() => new Set(parseArguments(wizard.draft.extraInstallArgs)));
 
+const noLibraries = computed(() => wizard.packages.length === 0);
+
 function hasStep(step: StepName): boolean {
   return wizard.draft.steps.includes(step);
+}
+
+function needsLibrary(step: StepName): boolean {
+  return noLibraries.value && changesPackages(step);
+}
+
+function projectBump(name: string): VersionBump {
+  return projectBumpFor(wizard.draft, name);
+}
+
+function setProjectBump(name: string, bump: VersionBump): void {
+  wizard.draft.projectBumps = { ...wizard.draft.projectBumps, [name]: bump };
 }
 
 function toggleStep(step: StepName): void {
@@ -61,7 +75,7 @@ function toggleFlag(flag: string): void {
     <section class="card">
       <div class="card-title">
         <h3>{{ t("options.stepsTitle") }}</h3>
-        <div class="row">
+        <div v-if="!noLibraries" class="row">
           <button
             v-for="preset in presets"
             :key="preset.key"
@@ -75,13 +89,24 @@ function toggleFlag(flag: string): void {
         </div>
       </div>
       <div class="steps">
-        <label v-for="(step, index) in allSteps" :key="step" class="step-card" :class="{ active: hasStep(step) }">
+        <label
+          v-for="(step, index) in allSteps"
+          :key="step"
+          class="step-card"
+          :class="{ active: hasStep(step), unavailable: needsLibrary(step) && !hasStep(step) }"
+        >
           <span class="check">
-            <input type="checkbox" :checked="hasStep(step)" @change="toggleStep(step)" />
+            <input
+              type="checkbox"
+              :checked="hasStep(step)"
+              :disabled="needsLibrary(step) && !hasStep(step)"
+              @change="toggleStep(step)"
+            />
           </span>
           <span class="step-text">
             <span class="step-title"
-              ><span class="faint">{{ index + 1 }}</span> {{ t(`steps.${step}`) }}</span
+              ><span class="faint">{{ index + 1 }}</span> {{ t(`steps.${step}`) }}
+              <span v-if="needsLibrary(step)" class="badge">{{ t("options.needsLibrary") }}</span></span
             >
             <span class="muted">{{ t(`options.stepText.${step}`) }}</span>
           </span>
@@ -104,6 +129,30 @@ function toggleFlag(flag: string): void {
             </button>
           </div>
           <span class="hint muted">{{ t("options.bump.hint") }}</span>
+          <label class="switch">
+            <input v-model="wizard.draft.bumpPerProject" type="checkbox" />
+            <span>{{ t("options.bump.perProject") }}</span>
+          </label>
+        </div>
+        <div v-if="wizard.draft.bumpPerProject" class="field">
+          <span class="hint muted">{{ t("options.bump.perProjectHint") }}</span>
+          <div class="project-bumps">
+            <template v-for="name in wizard.draft.projectNames" :key="name">
+              <span class="project-name mono">{{ name }}</span>
+              <div class="row">
+                <button
+                  v-for="bump in allBumps"
+                  :key="bump"
+                  class="chip"
+                  :class="{ active: projectBump(name) === bump }"
+                  type="button"
+                  @click="setProjectBump(name, bump)"
+                >
+                  {{ t(`options.bump.${bump}`) }}
+                </button>
+              </div>
+            </template>
+          </div>
         </div>
         <div class="field">
           <label>{{ t("options.bump.whenTitle") }}</label>
@@ -238,6 +287,24 @@ function toggleFlag(flag: string): void {
 .mode.active {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.step-card.unavailable {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.project-bumps {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) 1fr;
+  align-items: center;
+  gap: 6px 16px;
+}
+
+.project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .step-card .check,

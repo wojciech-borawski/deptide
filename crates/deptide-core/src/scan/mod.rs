@@ -14,5 +14,6 @@ pub use detect::{
 pub use duplicates::{find_duplicate_groups, DuplicateGroup};
 pub use git::{
     branch_suffix, compile_branch_pattern, current_branch, version_at_fork_point,
-    version_on_main_branch, ForkPointVersion, DEFAULT_BRANCH_SUFFIX_PATTERN,
+    version_change_on_branch, version_on_main_branch, BranchVersionChange, ForkPointVersion,
+    DEFAULT_BRANCH_SUFFIX_PATTERN,
 };

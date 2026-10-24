@@ -164,7 +164,7 @@ function setOnlyAffected(event: Event): void {
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 280px;
+  min-height: 150px;
 }
 
 .content {

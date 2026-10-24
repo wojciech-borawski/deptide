@@ -3,19 +3,23 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { ProjectView } from "@/api/types";
+import ProjectGroupBar from "@/components/projects/ProjectGroupBar.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import ProjectKindIcon from "@/components/ui/ProjectKindIcon.vue";
 import ProjectPath from "@/components/ui/ProjectPath.vue";
 import { groupByFolder } from "@/lib/project-paths";
 import { useUiStore } from "@/stores/ui";
 
+defineOptions({ inheritAttrs: false });
+
 const props = defineProps<{
   projects: ProjectView[];
+  available: readonly ProjectView[];
   selected: readonly string[];
   disabled?: boolean;
   emptyText?: string;
 }>();
-const emit = defineEmits<{ toggle: [name: string] }>();
+const emit = defineEmits<{ toggle: [name: string]; select: [names: string[]] }>();
 const ui = useUiStore();
 const { t } = useI18n();
 
@@ -27,7 +31,13 @@ function isSelected(project: ProjectView): boolean {
 </script>
 
 <template>
-  <div class="list">
+  <ProjectGroupBar
+    :available="props.available"
+    :selected="props.selected"
+    :disabled="props.disabled"
+    @select="emit('select', $event)"
+  />
+  <div class="list" v-bind="$attrs">
     <template v-for="group in grouped.groups" :key="group.folder ?? ''">
       <div
         v-if="group.folder !== null"

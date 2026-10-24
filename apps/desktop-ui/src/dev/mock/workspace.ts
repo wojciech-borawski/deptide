@@ -1,6 +1,7 @@
 import type {
   DependencyCandidate,
   ProjectView,
+  RunBackup,
   RunSummary,
   ScannedProject,
   Settings,
@@ -12,7 +13,12 @@ export const fakeRoot = "C:\\demo\\deptide-workspace";
 
 export const projectsRoot = "C:\\demo\\repos";
 
-export const workspaceState: { settings: Settings; config: UpdateConfig; history: RunSummary[] } = {
+export const workspaceState: {
+  settings: Settings;
+  config: UpdateConfig;
+  history: RunSummary[];
+  backups: RunBackup[];
+} = {
   settings: {
     projectsRoot,
     scanDepth: 4,
@@ -31,11 +37,93 @@ export const workspaceState: { settings: Settings; config: UpdateConfig; history
       { name: "Orders-Api", path: "../repos/services/orders-api" },
       { name: "Billing-Api", path: "../repos/services/billing-api" },
       { name: "Legacy-Portal", path: "../repos/legacy/portal" },
+      { name: "Demo-Core", path: "../repos/libs/core" },
+      { name: "Demo-UiKit", path: "../repos/libs/ui-kit" },
+    ],
+    groups: [
+      { name: "Shop", projects: ["Shop-Frontend", "Shop-Admin"] },
+      { name: "Services", projects: ["Orders-Api", "Billing-Api"] },
     ],
     transferIgnore: ["*.log", "coverage/", ".env.local"],
   },
-  history: [],
+  history: [
+    pastRun("2026-10-20T08-15-00", "core 2.2.0", ["Shop-Frontend", "Shop-Admin", "Orders-Api"], { backedUp: true }),
+    pastRun("2026-10-12T14-02-00", "core 2.1.4", ["Shop-Frontend", "Billing-Api"], { backedUp: false }),
+    pastRun("2026-10-11T09-40-00", "core 2.1.4", ["Shop-Frontend"], { dryRun: true }),
+  ],
+  backups: [
+    {
+      run: "2026-10-20T08-15-00-core-2-2-0",
+      logFile: `${fakeRoot}\\logs\\2026-10-20T08-15-00-core-2-2-0.log`,
+      folder: "2026-10-20T08-15-00-core-2-2-0",
+      projects: ["Shop-Frontend", "Shop-Admin", "Orders-Api"].map((name) => ({
+        name,
+        directory: `${projectsRoot}\\${name}`,
+        files: name === "Orders-Api" ? ["package.json"] : ["package.json", "package-lock.json"],
+      })),
+    },
+  ],
 };
+
+function pastRun(
+  stamp: string,
+  label: string,
+  projectNames: string[],
+  options: { backedUp?: boolean; dryRun?: boolean },
+): RunSummary {
+  const run = `${stamp}-${label.replace(/[^a-z0-9]+/g, "-")}`;
+  const startedAt = `${stamp.slice(0, 10)}T${stamp.slice(11).replace(/-/g, ":")}.000Z`;
+  return {
+    label,
+    packages: [`@demo/core@${label.split(" ")[1] ?? ""}`],
+    projectCount: projectNames.length,
+    concurrency: 3,
+    steps: ["install", "build"],
+    mode: "per-project",
+    dryRun: Boolean(options.dryRun),
+    startedAt,
+    finishedAt: startedAt,
+    totalDurationMs: 42_000,
+    busyDurationMs: 61_000,
+    logFile: `${fakeRoot}\\logs\\${run}.log`,
+    projects: projectNames.map((name) => ({
+      name,
+      directory: `${projectsRoot}\\${name}`,
+      status: "ok",
+      durationMs: 20_000,
+      stepTimings: [],
+      error: "",
+      warning: "",
+      installed: [],
+      diagnosis: null,
+      dependencyChanges: [],
+      retries: 0,
+    })),
+    okCount: projectNames.length,
+    warnCount: 0,
+    failedCount: 0,
+    skippedCount: 0,
+    aborted: false,
+    ...(options.backedUp ? { backupFolder: run } : {}),
+  };
+}
+
+export function withConfiguredGroups(config: UpdateConfig): UpdateConfig {
+  const configured = new Set(config.projects.map((project) => project.name));
+  const groups = (config.groups ?? [])
+    .map((group) => ({ ...group, projects: group.projects.filter((name) => configured.has(name)) }))
+    .filter((group) => group.projects.length > 0);
+  return { ...config, groups };
+}
+
+export function runFileName(startedAtMs: number, label: string): string {
+  const stamp = new Date(startedAtMs).toISOString().slice(0, 19).replace(/:/g, "-");
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return slug ? `${stamp}-${slug}` : stamp;
+}
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -83,6 +171,8 @@ export function dependencyCandidates(): DependencyCandidate[] {
       usedBy: consumers,
       isDevDependency: false,
       sections: ["dependencies"],
+      libraryProject: "Demo-Core",
+      ambiguousProjects: [],
     },
     {
       name: "@demo/ui-kit",
@@ -93,6 +183,8 @@ export function dependencyCandidates(): DependencyCandidate[] {
       usedBy: consumers.slice(0, 2),
       isDevDependency: false,
       sections: ["peer"],
+      libraryProject: "Demo-UiKit",
+      ambiguousProjects: [],
     },
     {
       name: "vue",
@@ -103,6 +195,8 @@ export function dependencyCandidates(): DependencyCandidate[] {
       usedBy: consumers,
       isDevDependency: true,
       sections: ["peer", "dev"],
+      libraryProject: null,
+      ambiguousProjects: [],
     },
     {
       name: "typescript",
@@ -113,6 +207,8 @@ export function dependencyCandidates(): DependencyCandidate[] {
       usedBy: consumers,
       isDevDependency: true,
       sections: ["dev"],
+      libraryProject: null,
+      ambiguousProjects: [],
     },
   ];
 }

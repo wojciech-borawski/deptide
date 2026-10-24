@@ -9,7 +9,7 @@ use deptide_core::domain::{
 };
 use deptide_core::execution::{
     diff_dependencies, execute_run, read_top_level_versions, restore_project, ProgressSink,
-    RunContext, RunEvent, RunOptions,
+    RunContext, RunEvent, RunFolders, RunOptions,
 };
 use deptide_core::scan::{
     branch_suffix, collect_dependency_candidates, compile_branch_pattern, current_branch,
@@ -50,6 +50,7 @@ fn job(name: &str, directory: std::path::PathBuf, depends_on: Vec<&str>) -> Job 
         depends_on: depends_on.into_iter().map(String::from).collect(),
         command: None,
         version: VersionPolicy::default(),
+        packing: None,
     }
 }
 
@@ -162,7 +163,7 @@ async fn files_are_backed_up_before_the_first_step_and_can_be_restored() {
     );
     let backups = root.mkdir("backups");
 
-    let context = RunContext::with_backups(
+    let context = RunContext::with_folders(
         "run".to_string(),
         "backup test".to_string(),
         vec![job("app", root.join("app"), vec![])],
@@ -173,7 +174,10 @@ async fn files_are_backed_up_before_the_first_step_and_can_be_restored() {
         },
         Arc::new(Silent),
         None,
-        Some(backups.clone()),
+        RunFolders {
+            backups: Some(backups.clone()),
+            locks: None,
+        },
     );
     execute_run(context.clone()).await;
 

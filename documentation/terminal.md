@@ -8,7 +8,11 @@ own folder, and shows the progress per project.
 
 1. Tick projects on the left. The list starts with the wizard selection, can
    be filtered by name or by kind (library / application) and stays disabled
-   while a command is running.
+   while a command is running. The project group chips above it select a
+   saved group, or add one with Shift+click or Ctrl+click (see
+   [Project groups](wizard-and-runs.md#project-groups)). Undoing a run opens
+   this screen with `npm install` typed and the restored projects ticked; it
+   starts only when Run is clicked.
 2. Type the command in the prompt and press Enter or click Run. Arrow up and
    down recall earlier commands; the last thirty are kept in the browser
    storage of the app and offered as chips while no run is shown.

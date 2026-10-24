@@ -10,6 +10,16 @@ pub struct PackageSpec {
     /// Installed with `--save-peer`; `save_dev` wins when both are set.
     #[serde(default)]
     pub save_peer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<PackMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackMode {
+    #[default]
+    NoSave,
+    Save,
 }
 
 impl PackageSpec {
@@ -19,6 +29,7 @@ impl PackageSpec {
             version: version.into(),
             save_dev: false,
             save_peer: false,
+            pack: None,
         }
     }
 
@@ -67,4 +78,8 @@ pub struct DependencyCandidate {
     /// Every section the package appears in across the consumers, in
     /// precedence order, without duplicates.
     pub sections: Vec<DependencySection>,
+    #[serde(default)]
+    pub library_project: Option<String>,
+    #[serde(default)]
+    pub ambiguous_projects: Vec<String>,
 }

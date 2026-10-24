@@ -3,7 +3,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once};
+
+use deptide_core::domain::{Job, StepName, VersionPolicy};
+use deptide_core::execution::{ProgressSink, RunEvent};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 static GIT_CEILING: Once = Once::new();
@@ -179,4 +182,96 @@ pub fn manifest(name: &str, version: &str, dependencies: &[(&str, &str)]) -> Str
         "{{\"name\": \"{name}\", \"version\": \"{version}\", \"scripts\": {{\"build\": \"echo build\"}}, \"dependencies\": {{{}}}}}",
         deps.join(", ")
     )
+}
+
+/// main at 1.0.0, branch A from main bumps to 1.1.0, branch B from A adds an
+/// unrelated commit. HEAD is on B.
+pub fn stacked_branches(label: &str) -> GitRepo {
+    let repo = GitRepo::new(label);
+    repo.commit_version("", "1.0.0");
+    repo.git(&["checkout", "-q", "-b", "A"]);
+    repo.commit_version("", "1.1.0");
+    repo.git(&["checkout", "-q", "-b", "B"]);
+    repo.commit_other("readme");
+    repo
+}
+
+/// The `version` in the package.json of `directory`.
+pub fn read_version(directory: &Path) -> String {
+    let text = fs::read_to_string(directory.join("package.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    manifest["version"].as_str().unwrap().to_string()
+}
+
+/// Collects the log lines a run emits.
+#[derive(Default)]
+pub struct Lines {
+    pub seen: Mutex<Vec<String>>,
+}
+
+impl ProgressSink for Lines {
+    fn emit(&self, event: RunEvent) {
+        if let RunEvent::LogLine { line, .. } = event {
+            self.seen.lock().unwrap().push(line);
+        }
+    }
+}
+
+/// Links `link` to the folder `target`: a junction on Windows, a symlink elsewhere.
+pub fn link_folder(link: &Path, target: &Path) {
+    #[cfg(windows)]
+    {
+        let native = |path: &Path| path.components().collect::<PathBuf>();
+        let status = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(native(link))
+            .arg(native(target))
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("cmd can be started");
+        assert!(status.success(), "mklink /J failed");
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("symlink can be created");
+}
+
+pub fn build_job(name: &str, directory: PathBuf) -> Job {
+    Job {
+        name: name.to_string(),
+        directory,
+        packages: vec![],
+        steps: vec![StepName::Build],
+        install_args: vec![],
+        audit_fix_args: vec![],
+        depends_on: vec![],
+        command: None,
+        version: VersionPolicy::default(),
+        packing: None,
+    }
+}
+
+#[cfg(windows)]
+pub fn is_alive(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .expect("tasklist can be started");
+    String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+}
+
+#[cfg(unix)]
+pub fn is_alive(pid: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        return std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(')').is_some_and(|(_, fields)| {
+                !matches!(fields.trim_start().chars().next(), Some('Z' | 'X'))
+            })
+        });
+    }
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|status| status.success())
 }

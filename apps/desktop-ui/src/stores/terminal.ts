@@ -39,6 +39,11 @@ export const useTerminalStore = defineStore("terminal", () => {
     projectNames.value = [...next];
   }
 
+  function prepareCommand(names: string[], line: string): void {
+    setProjects(names);
+    command.value = line;
+  }
+
   async function start(root: string): Promise<boolean> {
     const line = command.value.trim();
     if (!line || !projectNames.value.length) return false;
@@ -59,6 +64,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     canStart,
     setProjects,
     toggleProject,
+    prepareCommand,
     start,
   };
 });

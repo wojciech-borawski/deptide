@@ -25,6 +25,14 @@ pub enum Command {
     Exec(ExecArgs),
     #[command(about = "List past runs recorded in the workspace")]
     History(HistoryArgs),
+    #[command(about = "Show library versions per project, the build order and duplicate copies")]
+    Deps(DepsArgs),
+    #[command(about = "List the project groups defined in update-libs.json")]
+    Groups(GroupsArgs),
+    #[command(
+        about = "Put back the package.json and package-lock.json a past run backed up before it changed them"
+    )]
+    Restore(RestoreArgs),
 }
 
 #[derive(Args)]
@@ -46,10 +54,21 @@ pub struct RunArgs {
         short,
         long = "package",
         value_name = "NAME@VERSION",
-        required = true,
-        help = "Library to install, repeatable"
+        help = "Library to install, repeatable; without one only the version, audit, audit report and build steps run"
     )]
     pub packages: Vec<String>,
+    #[arg(
+        long = "pack",
+        value_name = "NAME",
+        help = "Library to build, npm pack and install from the tarball instead of the registry, repeatable; NAME is the package name of a configured project"
+    )]
+    pub packs: Vec<String>,
+    #[arg(
+        long,
+        requires = "packs",
+        help = "Save the packed tarball into package.json and the lockfile; without it only node_modules changes. Restore or reinstall before committing"
+    )]
+    pub pack_save: bool,
     #[arg(
         short = 'P',
         long = "project",
@@ -57,6 +76,12 @@ pub struct RunArgs {
         help = "Project to touch, repeatable; defaults to every configured project that is not skipped"
     )]
     pub projects: Vec<String>,
+    #[arg(
+        long = "group",
+        value_name = "NAME",
+        help = "Project group from update-libs.json whose projects are touched as well, repeatable"
+    )]
+    pub groups: Vec<String>,
     #[arg(
         long,
         value_delimiter = ',',
@@ -79,11 +104,23 @@ pub struct RunArgs {
     pub dry_run: bool,
     #[arg(
         long,
+        help = "Print the npm commands and version bumps each project would get, then exit without running"
+    )]
+    pub preview: bool,
+    #[arg(
+        long,
         value_enum,
         default_value = "patch",
         help = "Which part of each project's own version the version step raises"
     )]
     pub bump: BumpArg,
+    #[arg(
+        long = "project-bump",
+        value_name = "PROJECT=LEVEL",
+        value_parser = parse_project_bump,
+        help = "A bump level for one project instead of --bump, such as api=major; repeatable"
+    )]
+    pub project_bumps: Vec<(String, VersionBump)>,
     #[arg(
         long,
         value_enum,
@@ -153,6 +190,49 @@ pub struct HistoryArgs {
     pub limit: usize,
 }
 
+#[derive(Args)]
+pub struct GroupsArgs {
+    #[arg(help = "Workspace folder holding update-libs.json")]
+    pub workspace: String,
+}
+
+#[derive(Args)]
+pub struct RestoreArgs {
+    #[arg(help = "Workspace folder holding update-libs.json")]
+    pub workspace: String,
+    #[arg(help = "The run as `history` lists it, such as 2026-10-22T09-30-00-acme-core")]
+    pub run: String,
+    #[arg(
+        short = 'P',
+        long = "project",
+        value_name = "NAME",
+        help = "Project to restore, repeatable; defaults to every project the run backed up"
+    )]
+    pub projects: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct DepsArgs {
+    #[arg(help = "Workspace folder holding update-libs.json")]
+    pub workspace: String,
+    #[arg(
+        long,
+        help = "Ask the npm registry for each library's latest version (network)"
+    )]
+    pub latest: bool,
+    #[arg(
+        long,
+        help = "List libraries that node_modules holds more than one copy of"
+    )]
+    pub duplicates: bool,
+    #[arg(
+        long,
+        requires = "duplicates",
+        help = "With --duplicates, check every package instead of only the libraries"
+    )]
+    pub all_packages: bool,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum StepArg {
     Uninstall,
@@ -161,6 +241,8 @@ pub enum StepArg {
     ForceInstall,
     Version,
     Audit,
+    #[value(name = "audit-report")]
+    AuditReport,
     Build,
 }
 
@@ -172,6 +254,7 @@ impl From<StepArg> for StepName {
             StepArg::ForceInstall => StepName::ForceInstall,
             StepArg::Version => StepName::Version,
             StepArg::Audit => StepName::Audit,
+            StepArg::AuditReport => StepName::AuditReport,
             StepArg::Build => StepName::Build,
         }
     }
@@ -192,6 +275,16 @@ impl From<BumpArg> for VersionBump {
             BumpArg::Major => VersionBump::Major,
         }
     }
+}
+
+fn parse_project_bump(text: &str) -> Result<(String, VersionBump), String> {
+    let (project, level) = text
+        .rsplit_once('=')
+        .filter(|(project, _)| !project.trim().is_empty())
+        .ok_or_else(|| format!("expected PROJECT=LEVEL, got {text}"))?;
+    let bump = BumpArg::from_str(level.trim(), true)
+        .map_err(|_| format!("{level} is not patch, minor or major"))?;
+    Ok((project.trim().to_string(), bump.into()))
 }
 
 #[derive(Clone, Copy, ValueEnum)]

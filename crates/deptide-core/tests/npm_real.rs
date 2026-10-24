@@ -5,12 +5,15 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use common::TempDir;
+use deptide_core::dependencies::{
+    fetch_latest_versions, read_dependency_drift, DependencyRequest, LatestLookup,
+};
 use deptide_core::domain::{
-    ConfiguredProject, ExecutionMode, Job, JobSnapshot, JobStatus, PackageSpec, RunPlan, StepName,
-    UpdateConfig, VersionPolicy,
+    AuditCounts, ConfiguredProject, ExecutionMode, Job, JobSnapshot, JobStatus, PackageSpec,
+    RunPlan, StepName, UpdateConfig, VersionBump, VersionPolicy,
 };
 use deptide_core::execution::{
-    build_jobs, execute_run, ProgressSink, RunContext, RunEvent, RunOptions,
+    build_jobs, execute_run, preview_plan, ProgressSink, RunContext, RunEvent, RunOptions,
 };
 use deptide_core::workspace::{save_config, Workspace};
 
@@ -78,6 +81,7 @@ fn plan(steps: Vec<StepName>) -> RunPlan {
         label: "npm real".to_string(),
         save_as: None,
         version: VersionPolicy::default(),
+        project_bumps: Default::default(),
     }
 }
 
@@ -595,6 +599,7 @@ async fn stopping_a_project_kills_its_running_command() {
         depends_on: vec![],
         command: Some(r#"node -e "console.log('ready'); setTimeout(() => {}, 60000)""#.to_string()),
         version: VersionPolicy::default(),
+        packing: None,
     };
     let sink = Arc::new(StopAndCollect {
         context: Mutex::new(Weak::new()),
@@ -676,4 +681,311 @@ async fn an_uninstall_only_plan_leaves_the_removed_entries_removed() {
         "log: {:?}",
         run.lines
     );
+}
+
+const VULNERABLE_MANIFEST: &str =
+    r#"{"name":"b","version":"1.0.0","dependencies":{"minimist":"1.2.0","lodash":"4.17.15"}}"#;
+
+const BULK_ADVISORIES: &str = r#"{
+    "lodash":[{"id":1,"url":"https://example.com/1","title":"Prototype Pollution","severity":"high","vulnerable_versions":"<4.17.21","cwe":[],"cvss":{"score":7.4,"vectorString":null}}],
+    "minimist":[{"id":2,"url":"https://example.com/2","title":"Prototype Pollution","severity":"critical","vulnerable_versions":"<1.2.6","cwe":[],"cvss":{"score":9.8,"vectorString":null}}]
+}"#;
+
+/// Answers the registry's bulk advisory endpoint with `body` and every other request with 404.
+fn serve_advisories(body: &'static str) -> u16 {
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream);
+            let mut request_line = String::new();
+            let _ = reader.read_line(&mut request_line);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut request_body = vec![0; length];
+            let _ = reader.read_exact(&mut request_body);
+            let (status, answer) = if request_line.contains("/-/npm/v1/security/advisories/bulk") {
+                ("200 OK", body)
+            } else {
+                ("404 Not Found", "{}")
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+            let _ = reader.get_mut().write_all(response.as_bytes());
+        }
+    });
+    port
+}
+
+struct AuditRun {
+    job: JobSnapshot,
+    lines: Vec<String>,
+    files_before: Vec<Vec<u8>>,
+    files_after: Vec<Vec<u8>>,
+}
+
+async fn run_audit_report(manifest: &str, lockfile: &str, npmrc: &str) -> AuditRun {
+    let (root, workspace) = workspace_with_manifest(manifest);
+    root.write("repos/app/package-lock.json", lockfile);
+    root.write("repos/app/.npmrc", npmrc);
+    let files = ["repos/app/package.json", "repos/app/package-lock.json"];
+    let read_files = || -> Vec<Vec<u8>> {
+        files
+            .iter()
+            .map(|file| std::fs::read(root.join(file)).unwrap())
+            .collect()
+    };
+    let files_before = read_files();
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+    let mut plan = plan(vec![StepName::AuditReport]);
+    plan.packages.clear();
+    let jobs = build_jobs(&workspace, &config, &plan).jobs;
+
+    let sink = Arc::new(Collect::default());
+    let context = RunContext::new(
+        "npm-audit".to_string(),
+        "npm audit".to_string(),
+        jobs,
+        RunOptions {
+            concurrency: 1,
+            mode: ExecutionMode::PerProject,
+            dry_run: false,
+        },
+        sink.clone(),
+        None,
+    );
+    let mut snapshot = tokio::time::timeout(Duration::from_secs(120), execute_run(context))
+        .await
+        .expect("the audit run finishes");
+    let lines = sink.lines.lock().unwrap().clone();
+
+    AuditRun {
+        job: snapshot.jobs.remove(0),
+        lines,
+        files_before,
+        files_after: read_files(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_audit_report_counts_the_findings_per_severity_and_changes_no_file() {
+    let port = serve_advisories(BULK_ADVISORIES);
+    let npmrc =
+        format!("registry=http://127.0.0.1:{port}/\nfetch-retries=0\nupdate-notifier=false\n");
+
+    let run = run_audit_report(
+        VULNERABLE_MANIFEST,
+        include_str!("fixtures/audit/vulnerable-package-lock.json"),
+        &npmrc,
+    )
+    .await;
+
+    assert_eq!(run.job.status, JobStatus::Ok, "log: {:?}", run.lines);
+    assert_eq!(
+        run.job.audit,
+        Some(AuditCounts {
+            info: 0,
+            low: 0,
+            moderate: 0,
+            high: 1,
+            critical: 1,
+            total: 2,
+        }),
+        "log: {:?}",
+        run.lines
+    );
+    assert!(
+        run.lines.contains(&"$ npm audit --json".to_string()),
+        "log: {:?}",
+        run.lines
+    );
+    assert!(
+        run.lines.contains(
+            &"audit: 2 vulnerabilities (1 critical, 1 high, 0 moderate, 0 low, 0 info)".to_string()
+        ),
+        "log: {:?}",
+        run.lines
+    );
+    assert_eq!(run.files_after, run.files_before);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_audit_report_that_cannot_reach_the_registry_is_retried_and_fails() {
+    let run = run_audit_report(
+        VULNERABLE_MANIFEST,
+        include_str!("fixtures/audit/vulnerable-package-lock.json"),
+        "registry=http://127.0.0.1:9/\nfetch-retries=0\nupdate-notifier=false\n",
+    )
+    .await;
+
+    assert_eq!(run.job.status, JobStatus::Failed, "log: {:?}", run.lines);
+    assert_eq!(run.job.retries, 1, "log: {:?}", run.lines);
+    assert!(
+        run.job
+            .error
+            .starts_with("npm audit failed: request to http://127.0.0.1:9/"),
+        "error: {}",
+        run.job.error
+    );
+    assert_eq!(run.job.audit, None);
+    assert_eq!(run.files_after, run.files_before);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_audit_report_without_a_lockfile_fails_with_npm_reason() {
+    let (root, workspace) = workspace_with_manifest(VULNERABLE_MANIFEST);
+    root.write("repos/app/.npmrc", OFFLINE_NPMRC);
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+    let mut plan = plan(vec![StepName::AuditReport]);
+    plan.packages.clear();
+    let context = RunContext::new(
+        "npm-audit".to_string(),
+        "npm audit".to_string(),
+        build_jobs(&workspace, &config, &plan).jobs,
+        RunOptions {
+            concurrency: 1,
+            mode: ExecutionMode::PerProject,
+            dry_run: false,
+        },
+        Arc::new(Collect::default()),
+        None,
+    );
+
+    let snapshot = execute_run(context).await;
+
+    assert_eq!(snapshot.jobs[0].status, JobStatus::Failed);
+    assert_eq!(
+        snapshot.jobs[0].error,
+        "npm audit failed: ENOLOCK This command requires an existing lockfile."
+    );
+    assert!(!root.join("repos/app/package-lock.json").exists());
+}
+
+/// Runs `plan` for real and returns the npm lines the run logged and the ones the preview listed.
+async fn logged_and_previewed_commands(
+    manifest: &str,
+    plan: RunPlan,
+) -> (Vec<String>, Vec<String>) {
+    let (root, workspace) = workspace_with_manifest(manifest);
+    root.write("repos/app/.npmrc", OFFLINE_NPMRC);
+    let config = deptide_core::workspace::load_config(&workspace).unwrap();
+
+    let preview = preview_plan(&workspace, &config, &plan);
+    let previewed: Vec<String> = preview
+        .jobs
+        .iter()
+        .flat_map(|job| job.steps.iter().flat_map(|step| step.commands.clone()))
+        .collect();
+
+    let sink = Arc::new(Collect::default());
+    let context = RunContext::new(
+        "npm-preview".to_string(),
+        "npm preview".to_string(),
+        build_jobs(&workspace, &config, &plan).jobs,
+        RunOptions {
+            concurrency: 1,
+            mode: plan.mode,
+            dry_run: false,
+        },
+        sink.clone(),
+        None,
+    );
+    tokio::time::timeout(Duration::from_secs(180), execute_run(context))
+        .await
+        .expect("the run finishes");
+    let logged: Vec<String> = sink
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|line| line.strip_prefix("$ ").map(str::to_string))
+        .collect();
+
+    (logged, previewed)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_preview_lists_the_npm_lines_a_real_run_logs() {
+    let mut install = plan(vec![StepName::Uninstall, StepName::Install]);
+    install.packages = vec![PackageSpec::new("left-pad", "^1.3.0")];
+    install.extra_install_args = vec!["--cache=npm cache".to_string()];
+
+    let (logged, previewed) = logged_and_previewed_commands(
+        r#"{"name":"app","version":"1.0.0","private":true,"dependencies":{"left-pad":"1.2.0"}}"#,
+        install,
+    )
+    .await;
+
+    assert_eq!(
+        logged,
+        vec![
+            "npm uninstall left-pad".to_string(),
+            r#"npm install "left-pad@^1.3.0" --no-fund --no-audit "--cache=npm cache""#.to_string(),
+        ]
+    );
+    assert_eq!(previewed, logged);
+
+    let mut version_and_build = plan(vec![StepName::Version, StepName::Build]);
+    version_and_build.packages.clear();
+    version_and_build.version.bump = VersionBump::Minor;
+    let (logged, previewed) = logged_and_previewed_commands(
+        r#"{"name":"app","version":"1.0.0","private":true,"scripts":{"build":"node -e \"\""}}"#,
+        version_and_build,
+    )
+    .await;
+
+    assert_eq!(
+        logged,
+        vec![
+            "npm version minor --no-git-tag-version".to_string(),
+            "npm run build".to_string(),
+        ]
+    );
+    assert_eq!(previewed, logged);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn latest_versions_report_a_registry_failure_per_library_without_failing_the_others() {
+    let root = TempDir::new("npm-latest-offline");
+    root.write("repos/app/.npmrc", OFFLINE_NPMRC);
+    root.write(
+        "repos/app/package.json",
+        r#"{"name":"app","version":"1.0.0","dependencies":{"@acme/missing-one":"^1.0.0","left-pad":"^1.0.0"}}"#,
+    );
+    let workspace = Workspace::open(root.path()).unwrap();
+    let config = UpdateConfig {
+        packages: vec![
+            PackageSpec::new("@acme/missing-one", "1.0.0"),
+            PackageSpec::new("left-pad", "1.0.0"),
+        ],
+        projects: vec![ConfiguredProject::new("app", "repos/app")],
+        ..UpdateConfig::default()
+    };
+    let drift = read_dependency_drift(&workspace, &config);
+
+    let lookup = LatestLookup {
+        limit: 2,
+        ..LatestLookup::new(DependencyRequest::new())
+    };
+    let latest = fetch_latest_versions(&workspace, &config, &drift, &lookup).await;
+
+    let names: Vec<&str> = latest.iter().map(|entry| entry.name.as_str()).collect();
+    assert_eq!(names, vec!["@acme/missing-one", "left-pad"]);
+    for entry in &latest {
+        assert_eq!(entry.version, None, "{entry:?}");
+        let error = entry.error.as_deref().unwrap_or_default();
+        assert!(!error.is_empty(), "{entry:?}");
+    }
 }

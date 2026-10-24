@@ -4,6 +4,7 @@ use super::on_blocking_thread;
 use crate::app::dto::{ProjectInspection, ScanResult, ScannedProject};
 use deptide_core::domain::{DetectedProject, Settings};
 use deptide_core::error::{AppError, AppResult};
+use deptide_core::execution::{mark_packable_candidates, PackableLibraries};
 use deptide_core::scan::{
     apply_scan_selection, collect_dependency_candidates, detect_projects, read_project_at,
     DetectionOptions, ScanSelectionOutcome,
@@ -110,6 +111,7 @@ pub async fn inspect_projects(
     let options = detection_options(&settings, &workspace);
     let branch_pattern = settings.branch_suffix_pattern.clone();
 
+    let packable = PackableLibraries::read(&workspace, &config);
     let selected: Vec<(PathBuf, String)> = config
         .projects
         .iter()
@@ -148,8 +150,10 @@ pub async fn inspect_projects(
         let mut all = detected;
         all.extend(consumers.iter().cloned());
 
+        let mut candidates = collect_dependency_candidates(&all, &consumers, &branch_pattern);
+        mark_packable_candidates(&mut candidates, &packable);
         Ok(ProjectInspection {
-            candidates: collect_dependency_candidates(&all, &consumers, &branch_pattern),
+            candidates,
             unreadable,
         })
     })

@@ -2,8 +2,11 @@ mod common;
 
 use std::sync::Arc;
 
+use common::{manifest, TempDir};
 use deptide_core::domain::{ExecutionMode, Job, PackageSpec, StepName, VersionPolicy};
-use deptide_core::execution::{execute_run, ProgressSink, RunContext, RunEvent, RunOptions};
+use deptide_core::execution::{
+    execute_run, lock_project, ProgressSink, RunContext, RunEvent, RunFolders, RunOptions,
+};
 use deptide_desktop::app::state::AppState;
 
 struct SilentSink;
@@ -13,9 +16,13 @@ impl ProgressSink for SilentSink {
 }
 
 fn dry_run_context(id: &str) -> Arc<RunContext> {
-    let job = Job {
+    dry_run_context_in(id, std::env::temp_dir())
+}
+
+fn dry_run_job(directory: std::path::PathBuf) -> Job {
+    Job {
         name: "web".to_string(),
-        directory: std::env::temp_dir(),
+        directory,
         packages: vec![PackageSpec::new("left-pad", "1.3.0")],
         steps: vec![StepName::Install],
         install_args: vec![],
@@ -23,12 +30,15 @@ fn dry_run_context(id: &str) -> Arc<RunContext> {
         depends_on: vec![],
         command: None,
         version: VersionPolicy::default(),
-    };
+        packing: None,
+    }
+}
 
+fn dry_run_context_in(id: &str, directory: std::path::PathBuf) -> Arc<RunContext> {
     RunContext::new(
         id.to_string(),
         "guard".to_string(),
-        vec![job],
+        vec![dry_run_job(directory)],
         RunOptions {
             concurrency: 1,
             mode: ExecutionMode::PerProject,
@@ -82,4 +92,57 @@ fn abort_all_marks_every_registered_run_as_aborted() {
 
     assert!(first.registry.is_aborted());
     assert!(second.registry.is_aborted());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_is_not_restored_while_another_run_works_in_it() {
+    let root = TempDir::new("restore-while-busy");
+    let original = manifest("web", "1.0.0", &[]);
+    root.write("web/package.json", &original);
+    let state = AppState::default();
+    let finished = RunContext::with_folders(
+        "run-a".to_string(),
+        "real".to_string(),
+        vec![Job {
+            steps: vec![StepName::Build],
+            packages: vec![],
+            ..dry_run_job(root.join("web"))
+        }],
+        RunOptions {
+            concurrency: 1,
+            mode: ExecutionMode::PerProject,
+            dry_run: false,
+        },
+        Arc::new(SilentSink),
+        None,
+        RunFolders {
+            backups: Some(root.join("backups")),
+            locks: Some(root.join("locks")),
+        },
+    );
+    state.register(finished.clone());
+    execute_run(finished.clone()).await;
+    root.write("web/package.json", "{\"changed\":true}");
+    let other_run = lock_project(&root.join("locks"), &root.join("web"), "the other run")
+        .expect("another run holds the project");
+
+    let refused = finished.restore_job_files("web");
+
+    assert!(refused
+        .unwrap_err()
+        .message()
+        .starts_with("Not restored: the other run is working in this project"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("web/package.json")).unwrap(),
+        "{\"changed\":true}"
+    );
+    drop(other_run);
+    assert_eq!(
+        finished.restore_job_files("web").unwrap(),
+        vec!["package.json"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("web/package.json")).unwrap(),
+        original
+    );
 }

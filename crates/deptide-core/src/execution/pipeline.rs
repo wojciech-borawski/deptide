@@ -1,27 +1,34 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::backup::backup_project;
+use super::audit::{describe_audit, parse_audit_report};
+use super::backup::{backup_project, keep_newest_run_folders};
+use super::bump::{decide_bump, BumpDecision};
 use super::command::{describe_exit_code, npm_program, run_command, CommandOutcome, CommandSpec};
 use super::diagnose::diagnose;
 use super::manifest::write_entries;
+use super::pack::{
+    expected_packages, only_packs, own_package, pack_problem, plan_pack, record_tarball,
+    reported_tarball,
+};
 use super::state::{JobState, RunEvent};
 use super::steps::{
-    describe_entries, dry_run_lines, plan_audit_fix, plan_build, plan_install, plan_uninstall,
-    plan_version_bump, save_exact_peer_note, InstallGroup, ManifestEntry, PlannedCommand,
+    describe_entries, dry_run_lines, has_build_script, plan_audit_fix, plan_audit_report,
+    plan_build, plan_install, plan_reinstall_after_audit_fix, plan_uninstall, plan_version_bump,
+    save_exact_peer_note, InstallGroup, ManifestEntry, PlannedCommand,
 };
 use super::verify::{
     describe_installed, diff_dependencies, read_top_level_versions, verify_installed,
 };
 use super::RunContext;
-use crate::domain::{BumpWhen, DependencySection, Job, JobStatus, PackageManifest, StepName};
-use crate::error::AppError;
-use crate::scan::{
-    read_package_manifest, read_project_at, version_at_fork_point, version_on_main_branch,
-    ForkPointVersion, MANIFEST_FILE_NAME,
+use crate::domain::{
+    DependencySection, Job, JobStatus, PackageManifest, PackedTarball, Reason, StepName,
 };
+use crate::error::AppError;
+use crate::scan::{read_package_manifest, MANIFEST_FILE_NAME};
 use crate::util::text::describe_count;
 
 const TRANSIENT_CODES: &[&str] = &["ENETWORK", "EINTEGRITY"];
@@ -44,13 +51,6 @@ enum Restore {
     Everything,
 }
 
-fn changes_packages(step: StepName) -> bool {
-    matches!(
-        step,
-        StepName::Uninstall | StepName::Install | StepName::ForceInstall
-    )
-}
-
 fn has_install_step(job: &Job) -> bool {
     job.steps
         .iter()
@@ -61,7 +61,7 @@ fn is_last_package_step(job: &Job, step: StepName) -> bool {
     job.steps
         .iter()
         .rev()
-        .find(|candidate| changes_packages(**candidate))
+        .find(|candidate| candidate.changes_packages())
         == Some(&step)
 }
 
@@ -208,8 +208,16 @@ impl JobRunner {
     }
 
     async fn run_npm(&self, command: PlannedCommand) -> Result<CommandOutcome, StepError> {
+        self.run_npm_capturing(command, false).await
+    }
+
+    async fn run_npm_capturing(
+        &self,
+        command: PlannedCommand,
+        capture_stdout: bool,
+    ) -> Result<CommandOutcome, StepError> {
         let directory = self.start_step(&command.label);
-        self.append_log(format!("$ npm {}", command.args.join(" ")));
+        self.append_log(format!("$ {}", command.command_line()));
 
         let outcome = self
             .run_in_project(CommandSpec {
@@ -217,6 +225,7 @@ impl JobRunner {
                 args: command.args,
                 cwd: directory,
                 shell: None,
+                capture_stdout,
             })
             .await?;
 
@@ -245,6 +254,7 @@ impl JobRunner {
                 args: Vec::new(),
                 cwd: directory,
                 shell: Some(line.to_string()),
+                capture_stdout: false,
             },
             &self.context.registry,
             self.index,
@@ -277,7 +287,9 @@ impl JobRunner {
     }
 
     async fn step_uninstall(&self, job: &Job) -> Result<(), StepError> {
-        self.run_npm(plan_uninstall(job)).await?;
+        if let Some(command) = plan_uninstall(job) {
+            self.run_npm(command).await?;
+        }
         Ok(())
     }
 
@@ -285,7 +297,7 @@ impl JobRunner {
         let before = read_top_level_versions(&job.directory);
 
         if let Some(note) = save_exact_peer_note(job) {
-            self.append_log(note);
+            self.append_log(note.text());
         }
         for command in plan_install(job, force) {
             let outcome = self.run_npm(command).await?;
@@ -310,16 +322,43 @@ impl JobRunner {
             });
         }
 
+        if let Some(reinstall) = plan_reinstall_after_audit_fix(job) {
+            let outcome = self.run_npm(reinstall).await?;
+            if outcome.code != Some(0) {
+                return Err(StepError::Failure(format!(
+                    "npm install exited with code {}",
+                    describe_exit_code(outcome.code)
+                )));
+            }
+            self.verify(job);
+        }
         Ok(())
     }
 
-    async fn step_build(&self, job: &Job) -> Result<(), StepError> {
-        let has_build_script = read_project_at(&job.directory, &job.directory)
-            .map(|project| project.has_build_script)
-            .unwrap_or(false);
+    async fn step_audit_report(&self) -> Result<(), StepError> {
+        let outcome = self.run_npm_capturing(plan_audit_report(), true).await?;
 
-        if !has_build_script {
-            self.append_log("no build script, step skipped".to_string());
+        match parse_audit_report(&outcome.stdout.join(
+            "
+",
+        )) {
+            Ok(counts) => {
+                self.append_log(describe_audit(&counts));
+                self.with_state(|state| state.audit = Some(counts));
+                Ok(())
+            }
+            Err(message) => {
+                for line in outcome.stdout {
+                    self.append_log(line);
+                }
+                Err(StepError::Failure(message))
+            }
+        }
+    }
+
+    async fn step_build(&self, job: &Job) -> Result<(), StepError> {
+        if !has_build_script(&job.directory) {
+            self.append_log(Reason::NoBuildScript {}.text());
             return Ok(());
         }
 
@@ -334,76 +373,84 @@ impl JobRunner {
         Ok(())
     }
 
-    /// Whether the `version` step runs npm; logs the reason whenever git decides it.
-    async fn bump_allowed(&self, job: &Job, before: Option<&str>) -> bool {
-        let current = before.unwrap_or("none");
-        let directory = job.directory.clone();
+    async fn step_pack(&self, job: &Job) -> Result<(), StepError> {
+        let packing = job.packing.as_ref().ok_or_else(|| {
+            StepError::Failure("the run has no folder for packed libraries".to_string())
+        })?;
+        let package = own_package(job, packing).ok_or_else(|| {
+            StepError::Failure("the packed library is not part of this run".to_string())
+        })?;
+        let pack = plan_pack(job, packing);
+        for note in &pack.notes {
+            self.append_log(note.text());
+        }
+        fs::create_dir_all(&pack.destination).map_err(|error| {
+            StepError::Failure(format!(
+                "could not create {}: {error}",
+                pack.destination.display()
+            ))
+        })?;
+        if let Some(packs_root) = packing.folder.parent() {
+            keep_newest_run_folders(packs_root);
+        }
 
-        match job.version.when {
-            BumpWhen::Always => true,
-            BumpWhen::SameAsMain => {
-                let on_main =
-                    tokio::task::spawn_blocking(move || version_on_main_branch(&directory))
-                        .await
-                        .unwrap_or(None);
-
-                match on_main {
-                    Some(main) if before == Some(main.as_str()) => {
-                        self.append_log(format!("version {current} still equals main, bumping"));
-                        true
-                    }
-                    Some(main) => {
-                        self.append_log(format!(
-                            "version {current} already differs from main ({main}), bump skipped"
-                        ));
-                        false
-                    }
-                    None => {
-                        self.append_log(
-                            "could not read the version on the main branch, bump skipped"
-                                .to_string(),
-                        );
-                        false
-                    }
-                }
-            }
-            BumpWhen::NotBumpedOnBranch => {
-                let fork = tokio::task::spawn_blocking(move || version_at_fork_point(&directory))
-                    .await
-                    .unwrap_or_else(|_| {
-                        ForkPointVersion::Unavailable("the git lookup stopped".to_string())
-                    });
-
-                match fork {
-                    ForkPointVersion::Found {
-                        version,
-                        base_branch,
-                        commit,
-                    } if before == Some(version.as_str()) => {
-                        self.append_log(format!(
-                            "version {current} is unchanged since {base_branch} ({commit}), bumping"
-                        ));
-                        true
-                    }
-                    ForkPointVersion::Found {
-                        version,
-                        base_branch,
-                        commit,
-                    } => {
-                        self.append_log(format!(
-                            "version {current} already changed on this branch (was {version} at {base_branch} {commit}), bump skipped"
-                        ));
-                        false
-                    }
-                    ForkPointVersion::Unavailable(reason) => {
-                        self.append_log(format!(
-                            "cannot tell whether this branch bumped the version: {reason}, bump skipped"
-                        ));
-                        false
-                    }
-                }
+        if let Some(build) = pack.build {
+            let outcome = self.run_npm(build).await?;
+            if outcome.code != Some(0) {
+                return Err(StepError::Failure(format!(
+                    "npm run build exited with code {}",
+                    describe_exit_code(outcome.code)
+                )));
             }
         }
+
+        let outcome = self.run_npm_capturing(pack.pack, true).await?;
+        for line in &outcome.stdout {
+            self.append_log(line.clone());
+        }
+        if outcome.code != Some(0) {
+            return Err(StepError::Failure(format!(
+                "npm pack exited with code {}",
+                describe_exit_code(outcome.code)
+            )));
+        }
+
+        let tarball = reported_tarball(package, &outcome.stdout).map_err(StepError::Failure)?;
+        let path = pack.destination.join(&tarball.file);
+        if !path.is_file() {
+            return Err(StepError::Failure(format!(
+                "npm pack did not write {}",
+                path.display()
+            )));
+        }
+        self.share_tarball(package, &tarball);
+        self.append_log(format!("packed {}", path.display()));
+        Ok(())
+    }
+
+    fn share_tarball(&self, package: &str, tarball: &PackedTarball) {
+        let mut run = self.context.state();
+        for state in run.jobs.iter_mut() {
+            record_tarball(&mut state.job, package, tarball);
+        }
+    }
+
+    /// Whether the `version` step runs npm; logs the reason whenever git decides it.
+    async fn bump_allowed(&self, job: &Job, before: Option<&str>) -> bool {
+        let directory = job.directory.clone();
+        let when = job.version.when;
+        let current = before.map(str::to_string);
+        let decision =
+            tokio::task::spawn_blocking(move || decide_bump(&directory, when, current.as_deref()))
+                .await
+                .unwrap_or(BumpDecision::Skip {
+                    reason: Reason::LookupStopped {},
+                });
+
+        if let Some(line) = decision.log_line() {
+            self.append_log(line);
+        }
+        matches!(decision, BumpDecision::Bump { .. })
     }
 
     async fn step_version(&self, job: &Job) -> Result<(), StepError> {
@@ -430,7 +477,7 @@ impl JobRunner {
     }
 
     fn verify(&self, job: &Job) {
-        let installed = verify_installed(&job.directory, &job.packages);
+        let installed = verify_installed(&job.directory, &expected_packages(job));
         let mismatches: Vec<String> = installed
             .iter()
             .filter(|entry| !entry.matches)
@@ -474,6 +521,9 @@ impl JobRunner {
         let Some(root) = &self.context.backup_root else {
             return;
         };
+        if only_packs(job) {
+            return;
+        }
 
         let already = self.with_state(|state| state.backup_directory.is_some());
         if already {
@@ -556,7 +606,7 @@ impl JobRunner {
     }
 
     async fn run_step_keeping_entries(&self, job: &Job, step: StepName) -> Result<(), StepError> {
-        if !changes_packages(step) || !has_install_step(job) {
+        if !step.changes_packages() || !has_install_step(job) {
             return self.run_step_with_retry(job, step).await;
         }
 
@@ -585,6 +635,10 @@ impl JobRunner {
         self.end();
     }
 
+    pub fn release_project_lock(&self) {
+        self.context.release_project_lock(self.index);
+    }
+
     pub fn mark_skipped_with_reason(&self, reason: String) {
         self.with_state(|state| {
             state.status = JobStatus::Skipped;
@@ -594,6 +648,12 @@ impl JobRunner {
     }
 
     async fn run_step_once(&self, job: &Job, step: StepName) -> Result<(), StepError> {
+        if matches!(step, StepName::Install | StepName::ForceInstall) {
+            if let Some(reason) = pack_problem(job) {
+                self.append_log(reason.text());
+                return Err(StepError::Failure(reason.text()));
+            }
+        }
         if self.context.options.dry_run {
             for line in dry_run_lines(job, step) {
                 self.append_log(line);
@@ -607,7 +667,9 @@ impl JobRunner {
             StepName::ForceInstall => self.step_install(job, true).await,
             StepName::Version => self.step_version(job).await,
             StepName::Audit => self.step_audit(job).await,
+            StepName::AuditReport => self.step_audit_report().await,
             StepName::Build => self.step_build(job).await,
+            StepName::Pack => self.step_pack(job).await,
         }
     }
 

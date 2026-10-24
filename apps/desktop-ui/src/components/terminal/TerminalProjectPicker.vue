@@ -62,10 +62,12 @@ watch(
     <ProjectPickerList
       class="scroll"
       :projects="filter.visible.value"
+      :available="projects"
       :selected="terminal.projectNames"
       :disabled="terminal.isActive"
       :empty-text="t('terminal.noProjects')"
       @toggle="selection.toggle"
+      @select="terminal.setProjects"
     />
   </section>
 </template>

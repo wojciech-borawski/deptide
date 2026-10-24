@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::PackageSpec;
+use super::{PackageSpec, ReasonPreview};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -13,17 +14,21 @@ pub enum StepName {
     ForceInstall,
     Version,
     Audit,
+    #[serde(rename = "audit-report")]
+    AuditReport,
     Build,
+    Pack,
 }
 
 impl StepName {
-    pub const fn all() -> [StepName; 6] {
+    pub const fn all() -> [StepName; 7] {
         [
             StepName::Uninstall,
             StepName::Install,
             StepName::ForceInstall,
             StepName::Version,
             StepName::Audit,
+            StepName::AuditReport,
             StepName::Build,
         ]
     }
@@ -37,6 +42,14 @@ impl StepName {
         ]
     }
 
+    /// Whether the step adds or removes the run's packages, so it needs at least one.
+    pub fn changes_packages(self) -> bool {
+        matches!(
+            self,
+            StepName::Uninstall | StepName::Install | StepName::ForceInstall
+        )
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             StepName::Uninstall => "uninstall",
@@ -44,7 +57,9 @@ impl StepName {
             StepName::ForceInstall => "force install",
             StepName::Version => "version",
             StepName::Audit => "audit",
+            StepName::AuditReport => "audit report",
             StepName::Build => "build",
+            StepName::Pack => "pack",
         }
     }
 }
@@ -149,6 +164,26 @@ pub struct Job {
     pub depends_on: Vec<String>,
     pub command: Option<String>,
     pub version: VersionPolicy,
+    pub packing: Option<Packing>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Packing {
+    pub folder: PathBuf,
+    pub libraries: BTreeMap<String, PackedLibrary>,
+    pub ambiguous: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackedLibrary {
+    pub directory: PathBuf,
+    pub tarball: Option<PackedTarball>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackedTarball {
+    pub file: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +213,18 @@ pub struct InstalledPackage {
     pub matches: bool,
 }
 
+/// Vulnerability counts per severity, as `npm audit --json` reports them in `metadata.vulnerabilities`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AuditCounts {
+    pub info: u32,
+    pub low: u32,
+    pub moderate: u32,
+    pub high: u32,
+    pub critical: u32,
+    pub total: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunPlan {
@@ -195,6 +242,9 @@ pub struct RunPlan {
     pub save_as: Option<String>,
     #[serde(default)]
     pub version: VersionPolicy,
+    /// Bump levels that differ from `version.bump`, by project name.
+    #[serde(default)]
+    pub project_bumps: BTreeMap<String, VersionBump>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +262,9 @@ pub struct SavedRun {
     pub extra_install_args: Vec<String>,
     #[serde(default)]
     pub version: VersionPolicy,
+    /// Bump levels that differ from `version.bump`, by project name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project_bumps: BTreeMap<String, VersionBump>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,6 +294,7 @@ pub struct JobSnapshot {
     pub dependency_changes: Vec<DependencyChange>,
     pub retries: u32,
     pub backup_available: bool,
+    pub audit: Option<AuditCounts>,
     pub log: Vec<String>,
 }
 
@@ -281,6 +335,8 @@ pub struct RunProjectSummary {
     pub dependency_changes: Vec<DependencyChange>,
     #[serde(default)]
     pub retries: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<AuditCounts>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,4 +360,114 @@ pub struct RunSummary {
     pub failed_count: usize,
     pub skipped_count: usize,
     pub aborted: bool,
+    /// The run's folder under `backups/`; absent for dry runs and for summaries written before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_folder: Option<String>,
+}
+
+/// The backups a past run left behind, found from its summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunBackup {
+    /// The summary's file name without extension, which names the run for `restore`.
+    pub run: String,
+    /// The summary's `logFile`, so a screen can match the backup to the summary it shows.
+    pub log_file: String,
+    pub folder: String,
+    pub projects: Vec<BackedUpProject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackedUpProject {
+    pub name: String,
+    pub directory: String,
+    /// The backed up file names that a restore writes back.
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRestore {
+    pub name: String,
+    #[serde(flatten)]
+    pub outcome: RestoreOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum RestoreOutcome {
+    Restored { files: Vec<String> },
+    Failed { error: String },
+}
+
+/// What a run of a plan would do, worked out before it starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanPreview {
+    /// Jobs in the order the run starts them.
+    pub jobs: Vec<JobPreview>,
+    /// Selected project names that are not in the configuration.
+    pub missing: Vec<String>,
+    /// Selected projects that use none of the plan's packages, so they get no job.
+    pub without_packages: Vec<String>,
+    /// The error starting the run would fail with, when no job is left.
+    pub nothing_to_do: Option<ReasonPreview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobPreview {
+    pub name: String,
+    pub depends_on: Vec<String>,
+    pub steps: Vec<StepPreview>,
+    /// Present when the job runs the version step.
+    pub version: Option<VersionPreview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepPreview {
+    pub step: StepName,
+    /// The npm command lines the step runs, in order, as the run logs them after `$ `.
+    pub commands: Vec<String>,
+    /// What the run logs for the step besides its commands; `text` is the logged line.
+    pub notes: Vec<ReasonPreview>,
+}
+
+/// What the version step will do to one project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "camelCase")]
+pub enum VersionPreview {
+    #[serde(rename_all = "camelCase")]
+    Bump {
+        /// `None` when package.json has no version; npm then starts from 0.0.0.
+        current: Option<String>,
+        next: String,
+        level: VersionBump,
+        reason: Option<ReasonPreview>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Skip {
+        current: Option<String>,
+        level: VersionBump,
+        reason: ReasonPreview,
+    },
+    /// The step would run npm, but npm cannot bump the current version.
+    #[serde(rename_all = "camelCase")]
+    Fail {
+        current: Option<String>,
+        level: VersionBump,
+        reason: ReasonPreview,
+    },
+}
+
+impl VersionPreview {
+    pub fn version_after(&self) -> Option<&str> {
+        match self {
+            VersionPreview::Bump { next, .. } => Some(next),
+            VersionPreview::Skip { current, .. } => current.as_deref(),
+            VersionPreview::Fail { .. } => None,
+        }
+    }
 }

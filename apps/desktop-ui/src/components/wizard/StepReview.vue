@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import NoticeBanner from "@/components/ui/NoticeBanner.vue";
+import PlanPreviewSection from "@/components/wizard/PlanPreviewSection.vue";
 import { useCountedNoun } from "@/composables/useCountedNoun";
 
 import { formatSpec } from "@/lib/versions";
@@ -15,6 +16,7 @@ const { t } = useI18n();
 const countOf = useCountedNoun();
 
 const plan = computed(() => wizard.plan);
+const savesTarball = computed(() => plan.value.packages.some((spec) => spec.pack === "save"));
 const orderLabel = computed(() =>
   plan.value.mode === "per-step" ? t("common.stepByStep") : t("common.projectByProject"),
 );
@@ -43,10 +45,13 @@ const orderLabel = computed(() =>
         <div class="chips">
           <span v-for="spec in plan.packages" :key="spec.name" class="chip mono active">
             {{ formatSpec(spec) }}<span v-if="spec.saveDev" class="faint"> dev</span
-            ><span v-else-if="spec.savePeer" class="faint" :title="t('version.peerHint')"> peer</span>
+            ><span v-else-if="spec.savePeer" class="faint" :title="t('version.peerHint')"> peer</span
+            ><span v-if="spec.pack" class="faint">{{ ` ${t("review.packed")}` }}</span>
           </span>
         </div>
-        <p class="hint muted">{{ t("review.librariesHint") }}</p>
+        <NoticeBanner v-if="savesTarball" tone="warn">{{ t("version.packSaveWarning") }}</NoticeBanner>
+        <p v-if="plan.packages.length" class="hint muted">{{ t("review.librariesHint") }}</p>
+        <p v-else class="hint muted">{{ t("review.noLibraries") }}</p>
       </section>
     </div>
 
@@ -74,6 +79,9 @@ const orderLabel = computed(() =>
             <span v-if="plan.version.when !== 'always'" class="muted">
               · {{ t(`review.bumpWhen.${plan.version.when}`) }}</span
             >
+            <span v-for="(bump, name) in plan.projectBumps" :key="name" class="badge project-bump">
+              {{ name }} · {{ t(`options.bump.${bump}`) }}
+            </span>
           </dd>
         </template>
         <dt>{{ t("review.mode") }}</dt>
@@ -83,6 +91,8 @@ const orderLabel = computed(() =>
         </dd>
       </dl>
     </section>
+
+    <PlanPreviewSection />
 
     <section class="card save-grid">
       <div class="field">
@@ -113,6 +123,10 @@ const orderLabel = computed(() =>
 </template>
 
 <style scoped>
+.project-bump {
+  margin-left: 6px;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;

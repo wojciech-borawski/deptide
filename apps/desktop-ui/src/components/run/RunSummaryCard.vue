@@ -4,9 +4,11 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useI18n } from "vue-i18n";
 
 import type { RunProjectSummary, RunSummary } from "@/api/types";
+import AuditBadges from "@/components/run/AuditBadges.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import StatusBadge from "@/components/ui/StatusBadge.vue";
 import { describeError } from "@/composables/useAsyncAction";
+import { auditTotals } from "@/lib/audit";
 import { localizeDiagnosis, shortHash } from "@/lib/diagnosis";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { copyReport, saveReport } from "@/lib/report-export";
@@ -22,6 +24,7 @@ const toasts = useToastStore();
 const expanded = ref<Set<string>>(new Set());
 
 const hasRestorable = computed(() => props.restorable.length > 0);
+const audit = computed(() => auditTotals(props.summary.projects));
 
 const speedup = computed(() => {
   if (!props.summary.totalDurationMs) return null;
@@ -106,6 +109,11 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
       <span class="badge badge-warn">{{ t("run.summary.warn", { count: props.summary.warnCount }) }}</span>
       <span class="badge badge-failed">{{ t("run.summary.failed", { count: props.summary.failedCount }) }}</span>
       <span class="badge badge-skipped">{{ t("run.summary.skipped", { count: props.summary.skippedCount }) }}</span>
+      <template v-if="audit">
+        <span class="audit-label">{{ t("audit.summary") }}</span>
+        <span class="badge">{{ t("audit.total", { count: audit.total }, audit.total) }}</span>
+        <AuditBadges :counts="audit" />
+      </template>
       <span class="spacer" />
       <button class="btn btn-sm" type="button" @click="copyMarkdown">{{ t("run.summary.copyMarkdown") }}</button>
       <button class="btn btn-sm" type="button" @click="saveAs('markdown')">{{ t("run.summary.saveMd") }}</button>
@@ -135,6 +143,7 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
             <div class="row">
               <span>{{ project.name }}</span>
               <span v-if="project.retries" class="badge small">{{ t("run.retried", { count: project.retries }) }}</span>
+              <AuditBadges v-if="project.audit" :counts="project.audit" />
             </div>
             <div v-if="project.error || project.warning" class="detail" :class="project.error ? 'error' : 'warning'">
               {{ project.error || project.warning }}
@@ -276,6 +285,13 @@ async function saveAs(format: "markdown" | "html"): Promise<void> {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.audit-label {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .projects {

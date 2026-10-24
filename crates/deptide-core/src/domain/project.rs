@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::package::DependencySection;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfiguredProject {
@@ -63,6 +65,25 @@ pub struct PackageManifest {
     pub bin: Option<Value>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredDependencies<'a> {
+    pub dependencies: &'a BTreeMap<String, String>,
+    pub dev_dependencies: &'a BTreeMap<String, String>,
+    pub peer_dependencies: &'a BTreeMap<String, String>,
+}
+
+impl<'a> DeclaredDependencies<'a> {
+    pub fn find(&self, package: &str) -> Option<(DependencySection, &'a str)> {
+        [
+            (self.dependencies, DependencySection::Dependencies),
+            (self.dev_dependencies, DependencySection::Dev),
+            (self.peer_dependencies, DependencySection::Peer),
+        ]
+        .into_iter()
+        .find_map(|(entries, section)| entries.get(package).map(|range| (section, range.as_str())))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ProjectKind {
@@ -73,6 +94,14 @@ pub enum ProjectKind {
 }
 
 impl PackageManifest {
+    pub fn declared(&self) -> DeclaredDependencies<'_> {
+        DeclaredDependencies {
+            dependencies: &self.dependencies,
+            dev_dependencies: &self.dev_dependencies,
+            peer_dependencies: &self.peer_dependencies,
+        }
+    }
+
     pub fn kind(&self) -> ProjectKind {
         let library_signals = [
             self.main.is_some(),
@@ -111,4 +140,14 @@ pub struct DetectedProject {
     #[serde(default)]
     pub peer_dependencies: BTreeMap<String, String>,
     pub has_build_script: bool,
+}
+
+impl DetectedProject {
+    pub fn declared(&self) -> DeclaredDependencies<'_> {
+        DeclaredDependencies {
+            dependencies: &self.dependencies,
+            dev_dependencies: &self.dev_dependencies,
+            peer_dependencies: &self.peer_dependencies,
+        }
+    }
 }

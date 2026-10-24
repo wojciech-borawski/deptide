@@ -1,23 +1,31 @@
 <script setup lang="ts">
-import { useEventListener } from "@vueuse/core";
+import { ref } from "vue";
 
+import { useModal } from "@/composables/useModal";
 import AppIcon from "./AppIcon.vue";
 
 const props = withDefaults(defineProps<{ open: boolean; title: string; width?: string }>(), {
   width: "720px",
 });
 const emit = defineEmits<{ close: [] }>();
+const container = ref<HTMLElement | null>(null);
 
-useEventListener(window, "keydown", (event: KeyboardEvent) => {
-  if (event.key === "Escape" && props.open) emit("close");
-});
+useModal({ open: () => props.open, container, onClose: () => emit("close") });
 </script>
 
 <template>
   <Teleport to="body">
     <transition name="fade">
       <div v-if="props.open" class="backdrop" @mousedown.self="emit('close')">
-        <div class="dialog" :style="{ width: props.width }" role="dialog" :aria-label="props.title">
+        <div
+          ref="container"
+          class="dialog"
+          :style="{ width: props.width }"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="props.title"
+          tabindex="-1"
+        >
           <header class="dialog-header">
             <h2>{{ props.title }}</h2>
             <button class="btn btn-ghost btn-icon" type="button" aria-label="Close" @click="emit('close')">

@@ -5,6 +5,7 @@ use tauri::{Manager, WindowEvent};
 use app::commands;
 use app::state::AppState;
 use app::{error_log, tray};
+use deptide_core::dependencies::DependencyRequests;
 use deptide_core::transfer::ReceiveClipboard;
 
 pub fn run() {
@@ -14,10 +15,12 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .manage(ReceiveClipboard::default())
+        .manage(DependencyRequests::default())
         .setup(|app| {
             if let Ok(log_directory) = app.path().app_log_dir() {
                 error_log::install(&log_directory);
             }
+            deptide_core::execution::install_crash_hook();
             if let Err(error) = tray::install(app.handle()) {
                 error_log::record("tray", &error.to_string());
             }
@@ -26,6 +29,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {
                 window.state::<AppState>().abort_all();
+                window.state::<DependencyRequests>().cancel_all();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -36,11 +40,19 @@ pub fn run() {
             commands::scan_projects,
             commands::apply_scan,
             commands::inspect_projects,
+            commands::read_dependency_drift,
+            commands::read_dependency_graph,
+            commands::find_installed_copies,
+            commands::open_dependency_request,
+            commands::cancel_dependency_request,
             commands::start_run,
+            commands::preview_plan,
             commands::start_command_run,
             commands::abort_run,
             commands::abort_job,
             commands::restore_project,
+            commands::list_run_backups,
+            commands::restore_run_files,
             commands::check_for_update,
             commands::get_run_snapshot,
             commands::delete_saved_run,
